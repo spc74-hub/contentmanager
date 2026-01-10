@@ -132,7 +132,7 @@ def download_youtube_subtitles(video_id: str) -> Optional[str]:
             # Try manual subtitles first, then auto-generated
             for auto_flag in [False, True]:
                 cmd = [
-                    "/Users/sergioporcarcelda/Library/Python/3.9/bin/yt-dlp",
+                    "yt-dlp",
                     "--skip-download",
                     "--write-auto-sub" if auto_flag else "--write-sub",
                     "--sub-lang", lang,
@@ -379,7 +379,7 @@ async def add_channel_by_url(request: AddByUrlRequest):
     try:
         result = subprocess.run(
             [
-                "/Users/sergioporcarcelda/Library/Python/3.9/bin/yt-dlp",
+                "yt-dlp",
                 "--dump-json",
                 "--playlist-items", "1",
                 "--no-warnings",
@@ -718,7 +718,7 @@ async def import_videos_from_channel(channel_id: int, request: ImportVideosReque
             # Get channel_id from first result
             result = subprocess.run(
                 [
-                    "/Users/sergioporcarcelda/Library/Python/3.9/bin/yt-dlp",
+                    "yt-dlp",
                     "--print", "channel_id",
                     "--print", "channel_url",
                     "--playlist-items", "1",
@@ -770,7 +770,7 @@ async def import_videos_from_channel(channel_id: int, request: ImportVideosReque
 
         result = subprocess.run(
             [
-                "/Users/sergioporcarcelda/Library/Python/3.9/bin/yt-dlp",
+                "yt-dlp",
                 "--dump-json",
                 "--flat-playlist",
                 "--no-warnings",
