@@ -3,7 +3,7 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link
+  Edit2, Trash2, Plus, Link, Star
 } from 'lucide-react'
 
 interface ChannelTheme {
@@ -27,6 +27,7 @@ interface CuratedChannel {
   use_type: string
   is_active: boolean
   is_resolved: boolean
+  is_favorite: boolean
   last_import_at: string | null
   total_videos_imported: number
   created_at: string | null
@@ -133,6 +134,7 @@ export function Channels() {
   const [selectedEnergy, setSelectedEnergy] = useState<string | null>(null)
   const [selectedUseType, setSelectedUseType] = useState<string | null>(null)
   const [onlyResolved, setOnlyResolved] = useState<boolean | null>(null)
+  const [onlyFavorites, setOnlyFavorites] = useState<boolean | null>(null)
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -146,6 +148,7 @@ export function Channels() {
       if (selectedEnergy) params.append('energy', selectedEnergy)
       if (selectedUseType) params.append('use_type', selectedUseType)
       if (onlyResolved !== null) params.append('is_resolved', onlyResolved.toString())
+      if (onlyFavorites !== null) params.append('is_favorite', onlyFavorites.toString())
       if (searchInput) params.append('search', searchInput)
       params.append('limit', '500')
 
@@ -176,7 +179,7 @@ export function Channels() {
   useEffect(() => {
     fetchChannels()
     fetchStats()
-  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, onlyResolved])
+  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, onlyResolved, onlyFavorites])
 
   // Debounced search
   useEffect(() => {
@@ -322,9 +325,27 @@ export function Channels() {
     setSelectedEnergy(null)
     setSelectedUseType(null)
     setOnlyResolved(null)
+    setOnlyFavorites(null)
   }
 
-  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || onlyResolved !== null || searchInput
+  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || onlyResolved !== null || onlyFavorites !== null || searchInput
+
+  // Toggle favorite
+  const handleToggleFavorite = async (channelId: number) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/${channelId}/toggle-favorite`, {
+        method: 'POST'
+      })
+      if (response.ok) {
+        // Update local state
+        setChannels(prev => prev.map(ch =>
+          ch.id === channelId ? { ...ch, is_favorite: !ch.is_favorite } : ch
+        ))
+      }
+    } catch (error) {
+      console.error('Error toggling favorite:', error)
+    }
+  }
 
   // Update channel theme
   const handleUpdateTheme = async (channelId: number, newThemeId: number | null) => {
@@ -751,6 +772,19 @@ export function Channels() {
                 <option value="true">Solo resueltos</option>
                 <option value="false">Solo pendientes</option>
               </select>
+
+              {/* Favorites filter */}
+              <button
+                onClick={() => setOnlyFavorites(onlyFavorites === true ? null : true)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${
+                  onlyFavorites === true
+                    ? 'bg-yellow-100 border-yellow-400 text-yellow-700'
+                    : 'bg-white hover:bg-yellow-50 border-gray-300'
+                }`}
+              >
+                <Star className={`w-4 h-4 ${onlyFavorites === true ? 'fill-yellow-500' : ''}`} />
+                Favoritos
+              </button>
             </div>
 
             {hasActiveFilters && (
@@ -806,6 +840,12 @@ export function Channels() {
                   <tr key={channel.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleToggleFavorite(channel.id)}
+                          className="p-1 hover:bg-yellow-100 rounded transition-colors"
+                        >
+                          <Star className={`w-4 h-4 ${channel.is_favorite ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`} />
+                        </button>
                         <Youtube className="w-4 h-4 text-red-600" />
                         <span className="font-medium">{channel.name}</span>
                       </div>
@@ -982,6 +1022,13 @@ export function Channels() {
                             <div className="text-xs text-gray-400">Pendiente</div>
                           )}
                           <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleToggleFavorite(channel.id)}
+                              className="p-1 hover:bg-yellow-100 rounded transition-colors"
+                              title="Favorito"
+                            >
+                              <Star className={`w-3 h-3 ${channel.is_favorite ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`} />
+                            </button>
                             <button
                               onClick={() => setEditingChannel(channel)}
                               className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"

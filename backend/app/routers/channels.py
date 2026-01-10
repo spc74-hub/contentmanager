@@ -44,6 +44,7 @@ class CuratedChannel(BaseModel):
     use_type: str = "inspiracion"
     is_active: bool = True
     is_resolved: bool = False
+    is_favorite: bool = False
     last_import_at: Optional[str] = None
     total_videos_imported: int = 0
     created_at: Optional[str] = None
@@ -70,6 +71,7 @@ class ChannelUpdate(BaseModel):
     use_type: Optional[str] = None
     is_active: Optional[bool] = None
     is_resolved: Optional[bool] = None
+    is_favorite: Optional[bool] = None
 
 
 class ChannelsResponse(BaseModel):
@@ -229,6 +231,7 @@ async def get_channels(
     energy: Optional[str] = None,
     use_type: Optional[str] = None,
     is_resolved: Optional[bool] = None,
+    is_favorite: Optional[bool] = None,
     search: Optional[str] = None,
     limit: int = 100,
     offset: int = 0
@@ -252,6 +255,8 @@ async def get_channels(
         query = query.eq("use_type", use_type)
     if is_resolved is not None:
         query = query.eq("is_resolved", is_resolved)
+    if is_favorite is not None:
+        query = query.eq("is_favorite", is_favorite)
     if search:
         query = query.ilike("name", f"%{search}%")
 
@@ -267,6 +272,8 @@ async def get_channels(
         count_response = count_response.eq("use_type", use_type)
     if is_resolved is not None:
         count_response = count_response.eq("is_resolved", is_resolved)
+    if is_favorite is not None:
+        count_response = count_response.eq("is_favorite", is_favorite)
     if search:
         count_response = count_response.ilike("name", f"%{search}%")
     count_result = count_response.execute()
@@ -494,6 +501,25 @@ async def delete_channel(channel_id: int):
         raise HTTPException(status_code=404, detail="Channel not found")
 
     return {"success": True, "deleted_id": channel_id}
+
+
+@router.post("/{channel_id}/toggle-favorite")
+async def toggle_favorite(channel_id: int):
+    """Toggle favorite status for a channel."""
+    supabase = get_supabase()
+
+    # Get current state
+    response = supabase.table("curated_channels").select("is_favorite").eq("id", channel_id).single().execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Channel not found")
+
+    current_favorite = response.data.get("is_favorite", False)
+    new_favorite = not current_favorite
+
+    # Update
+    supabase.table("curated_channels").update({"is_favorite": new_favorite}).eq("id", channel_id).execute()
+
+    return {"success": True, "is_favorite": new_favorite}
 
 
 @router.post("/import-excel", response_model=ImportExcelResponse)
