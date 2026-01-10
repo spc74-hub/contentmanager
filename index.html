@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestor de Contenidos - Ver Más Tarde</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Google Identity Services -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="logo">📚 Gestor de Contenidos</h1>
+                <div class="stats-bar">
+                    <div class="stat-item total-stat">
+                        <span class="stat-label">Total Videos</span>
+                        <span class="stat-value" id="total-videos">0</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Filters Section -->
+        <section class="filters-section">
+            <div class="filters-container">
+                <div class="filter-group">
+                    <label for="author-filter">Filtrar por Autor</label>
+                    <select id="author-filter">
+                        <option value="">Todos los autores</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label for="category-filter">Filtrar por Categoría</label>
+                    <select id="category-filter">
+                        <option value="">Todas las categorías</option>
+                    </select>
+                </div>
+
+                <div class="filter-group">
+                    <label>Duración (minutos)</label>
+                    <div class="range-inputs">
+                        <input type="number" id="duration-min" placeholder="Min" min="0">
+                        <span>-</span>
+                        <input type="number" id="duration-max" placeholder="Max" min="0">
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label>Likes</label>
+                    <div class="range-inputs">
+                        <input type="number" id="likes-min" placeholder="Min" min="0">
+                        <span>-</span>
+                        <input type="number" id="likes-max" placeholder="Max" min="0">
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label for="search-input">Buscar</label>
+                    <input type="text" id="search-input" placeholder="Buscar por título...">
+                </div>
+
+                <button class="btn-clear-filters" id="clear-filters">Limpiar Filtros</button>
+                <button class="btn-import" id="btn-import-playlist">📥 Importar Playlist</button>
+            </div>
+        </section>
+
+        <!-- Stats by Category and Author -->
+        <section class="stats-section">
+            <div class="stats-grid">
+                <div class="stats-card">
+                    <h3>📊 Videos por Categoría</h3>
+                    <div class="stats-list" id="category-stats"></div>
+                </div>
+                <div class="stats-card">
+                    <h3>👤 Videos por Autor</h3>
+                    <div class="stats-list scrollable" id="author-stats"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Loading indicator -->
+        <div class="loading-container" id="loading">
+            <div class="loading-spinner"></div>
+            <p>Cargando datos de YouTube...</p>
+            <p class="loading-progress" id="loading-progress"></p>
+        </div>
+
+        <!-- Main Content -->
+        <main class="main-content" id="main-content">
+            <!-- Videos will be rendered here by JavaScript -->
+        </main>
+
+        <!-- Import Playlist Modal -->
+        <div class="modal" id="import-modal">
+            <div class="modal-content modal-large">
+                <h2>📥 Importar desde YouTube</h2>
+
+                <div id="import-step-auth" style="display: none;">
+                    <p>Conecta con tu cuenta de Google para ver todas tus playlists de YouTube.</p>
+                    <div class="oauth-section">
+                        <button class="btn-google" id="btn-google-login">
+                            <svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z"/></svg>
+                            Conectar con Google
+                        </button>
+                    </div>
+                    <div class="divider"><span>o</span></div>
+                    <p class="alt-method">También puedes introducir manualmente:</p>
+                    <input type="text" id="channel-input" placeholder="URL del canal o @username (ej: @micanal)">
+                    <div class="modal-buttons">
+                        <button class="btn-primary" id="btn-load-playlists">Cargar Playlists del Canal</button>
+                        <button class="btn-secondary" id="btn-close-import">Cancelar</button>
+                    </div>
+                </div>
+
+                <div id="import-step-1" style="display: none;">
+                    <div class="user-info" id="user-info"></div>
+                    <p>Selecciona una playlist para importar:</p>
+                </div>
+
+                <div id="import-step-2" style="display: none;">
+                    <p>Selecciona una playlist para importar:</p>
+                    <div class="playlists-list" id="playlists-list">
+                        <!-- Playlists will be loaded here -->
+                    </div>
+                    <div class="import-options">
+                        <label for="import-category">Asignar a categoría:</label>
+                        <select id="import-category">
+                            <option value="">-- Sin categoría --</option>
+                        </select>
+                    </div>
+                    <div class="modal-buttons">
+                        <button class="btn-secondary" id="btn-back-step1">← Volver</button>
+                        <button class="btn-primary" id="btn-import-selected" disabled>Importar Playlist Seleccionada</button>
+                    </div>
+                </div>
+
+                <div id="import-step-3" style="display: none;">
+                    <div class="import-progress">
+                        <div class="loading-spinner"></div>
+                        <p id="import-progress-text">Importando videos...</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Key Modal -->
+        <div class="modal" id="api-modal">
+            <div class="modal-content">
+                <h2>🔑 Configurar YouTube API Key</h2>
+                <p>Para obtener la duración y likes de los videos, necesitas una API Key de YouTube.</p>
+                <p class="modal-instructions">
+                    1. Ve a <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console</a><br>
+                    2. Crea o selecciona un proyecto<br>
+                    3. Habilita la "YouTube Data API v3"<br>
+                    4. Crea una API Key y pégala aquí
+                </p>
+                <input type="text" id="api-key-input" placeholder="Tu API Key de YouTube">
+                <div class="modal-buttons">
+                    <button class="btn-primary" id="save-api-key">Guardar y Cargar Datos</button>
+                    <button class="btn-secondary" id="skip-api-key">Usar datos de ejemplo</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
