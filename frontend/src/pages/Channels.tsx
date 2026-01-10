@@ -114,6 +114,18 @@ export function Channels() {
   const [bulkImporting, setBulkImporting] = useState(false)
   const [bulkImportProgress, setBulkImportProgress] = useState<{ current: number; total: number; results: { name: string; imported: number; transcripts: number }[] } | null>(null)
 
+  // Bulk import favorites state
+  const [bulkFavoritesJobId, setBulkFavoritesJobId] = useState<string | null>(null)
+  const [bulkFavoritesProgress, setBulkFavoritesProgress] = useState<{
+    status: string
+    total_channels: number
+    processed_channels: number
+    current_channel: string | null
+    results: { channel: string; imported: number; transcripts: number; success: boolean }[]
+    errors: string[]
+  } | null>(null)
+  const [showBulkFavoritesModal, setShowBulkFavoritesModal] = useState(false)
+
   // Edit/Delete/Add modals
   const [editingChannel, setEditingChannel] = useState<CuratedChannel | null>(null)
   const [deletingChannel, setDeletingChannel] = useState<CuratedChannel | null>(null)
@@ -423,6 +435,74 @@ export function Channels() {
     }
   }
 
+  // Start bulk import of favorites
+  const startBulkFavoritesImport = async (videosPerChannel: number = 10, delaySeconds: number = 30) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/bulk-import/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel_ids: null, // null = all favorites
+          max_videos_per_channel: videosPerChannel,
+          delay_seconds: delaySeconds
+        })
+      })
+      const result = await response.json()
+      if (result.success) {
+        setBulkFavoritesJobId(result.job_id)
+        setShowBulkFavoritesModal(true)
+        // Start polling for progress
+        pollBulkFavoritesProgress(result.job_id)
+      } else {
+        alert(result.error || 'Error al iniciar importación')
+      }
+    } catch (error) {
+      console.error('Error starting bulk import:', error)
+      alert('Error al iniciar importación masiva')
+    }
+  }
+
+  // Poll for bulk import progress
+  const pollBulkFavoritesProgress = async (jobId: string) => {
+    const poll = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/channels/bulk-import/${jobId}`)
+        const progress = await response.json()
+        setBulkFavoritesProgress(progress)
+
+        if (progress.status === 'running') {
+          setTimeout(poll, 3000) // Poll every 3 seconds
+        } else {
+          // Completed or cancelled - refresh data
+          fetchChannels()
+          fetchStats()
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error)
+      }
+    }
+    poll()
+  }
+
+  // Cancel bulk import
+  const cancelBulkFavoritesImport = async () => {
+    if (!bulkFavoritesJobId) return
+    try {
+      await fetch(`${apiUrl}/api/channels/bulk-import/${bulkFavoritesJobId}/cancel`, {
+        method: 'POST'
+      })
+    } catch (error) {
+      console.error('Error cancelling:', error)
+    }
+  }
+
+  // Close bulk favorites modal
+  const closeBulkFavoritesModal = () => {
+    setShowBulkFavoritesModal(false)
+    setBulkFavoritesJobId(null)
+    setBulkFavoritesProgress(null)
+  }
+
   // Group channels by theme for grid view
   const channelsByTheme = useMemo(() => {
     const grouped: Record<string, CuratedChannel[]> = {}
@@ -494,6 +574,15 @@ export function Channels() {
               <FileSpreadsheet className="w-4 h-4" />
             )}
             Importar Excel
+          </button>
+          <button
+            onClick={() => startBulkFavoritesImport(10, 30)}
+            disabled={bulkFavoritesJobId !== null}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            title="Importa 10 videos de cada canal favorito con 30s de delay"
+          >
+            <Star className="w-4 h-4" />
+            Importar Favoritos
           </button>
           <a
             href={`${apiUrl}/api/channels/export`}
@@ -1282,6 +1371,138 @@ export function Channels() {
                 <Trash2 className="w-4 h-4" />
                 Eliminar
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Bulk Import Favorites Progress */}
+      {showBulkFavoritesModal && bulkFavoritesProgress && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Star className="w-5 h-5 text-purple-600" />
+                Importando Favoritos
+              </h3>
+              {bulkFavoritesProgress.status === 'completed' || bulkFavoritesProgress.status === 'cancelled' ? (
+                <button onClick={closeBulkFavoritesModal} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              ) : null}
+            </div>
+
+            {/* Progress bar */}
+            <div className="mb-4">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>
+                  {bulkFavoritesProgress.status === 'running' ? (
+                    <>Procesando: {bulkFavoritesProgress.current_channel || '...'}</>
+                  ) : bulkFavoritesProgress.status === 'completed' ? (
+                    'Completado'
+                  ) : (
+                    'Cancelado'
+                  )}
+                </span>
+                <span>{bulkFavoritesProgress.processed_channels} / {bulkFavoritesProgress.total_channels}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className={`h-3 rounded-full transition-all ${
+                    bulkFavoritesProgress.status === 'completed' ? 'bg-green-500' :
+                    bulkFavoritesProgress.status === 'cancelled' ? 'bg-orange-500' :
+                    'bg-purple-500'
+                  }`}
+                  style={{ width: `${(bulkFavoritesProgress.processed_channels / bulkFavoritesProgress.total_channels) * 100}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Results list */}
+            {bulkFavoritesProgress.results.length > 0 && (
+              <div className="max-h-48 overflow-y-auto mb-4 border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Canal</th>
+                      <th className="text-center px-2 py-2">Videos</th>
+                      <th className="text-center px-2 py-2">Transcr.</th>
+                      <th className="text-center px-2 py-2">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {bulkFavoritesProgress.results.map((r, i) => (
+                      <tr key={i} className={r.success ? '' : 'bg-red-50'}>
+                        <td className="px-3 py-1.5 truncate max-w-[180px]" title={r.channel}>{r.channel}</td>
+                        <td className="text-center px-2 py-1.5">{r.imported}</td>
+                        <td className="text-center px-2 py-1.5">{r.transcripts}</td>
+                        <td className="text-center px-2 py-1.5">
+                          {r.success ? (
+                            <Check className="w-4 h-4 text-green-600 mx-auto" />
+                          ) : (
+                            <X className="w-4 h-4 text-red-600 mx-auto" />
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Errors */}
+            {bulkFavoritesProgress.errors.length > 0 && (
+              <div className="text-sm text-red-600 mb-4 max-h-20 overflow-y-auto">
+                {bulkFavoritesProgress.errors.slice(0, 5).map((e, i) => (
+                  <div key={i}>{e}</div>
+                ))}
+              </div>
+            )}
+
+            {/* Summary */}
+            {bulkFavoritesProgress.status !== 'running' && (
+              <div className="bg-gray-50 rounded-lg p-3 mb-4">
+                <div className="grid grid-cols-3 text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-blue-600">
+                      {bulkFavoritesProgress.results.reduce((sum, r) => sum + r.imported, 0)}
+                    </div>
+                    <div className="text-xs text-gray-500">Videos importados</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-green-600">
+                      {bulkFavoritesProgress.results.reduce((sum, r) => sum + r.transcripts, 0)}
+                    </div>
+                    <div className="text-xs text-gray-500">Transcripciones</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-purple-600">
+                      {bulkFavoritesProgress.results.filter(r => r.success).length}
+                    </div>
+                    <div className="text-xs text-gray-500">Canales OK</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              {bulkFavoritesProgress.status === 'running' ? (
+                <button
+                  onClick={cancelBulkFavoritesImport}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                >
+                  <X className="w-4 h-4" />
+                  Cancelar
+                </button>
+              ) : (
+                <button
+                  onClick={closeBulkFavoritesModal}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                >
+                  Cerrar
+                </button>
+              )}
             </div>
           </div>
         </div>

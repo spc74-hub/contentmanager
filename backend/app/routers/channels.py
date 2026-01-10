@@ -1006,3 +1006,143 @@ async def import_videos_from_channel(channel_id: int, request: ImportVideosReque
             errors=[str(e)],
             channel_resolved=channel_resolved
         )
+
+
+# ============== Bulk Import ==============
+
+class BulkImportRequest(BaseModel):
+    channel_ids: Optional[List[int]] = None  # If None, import all favorites
+    max_videos_per_channel: int = 10
+    delay_seconds: int = 30  # Delay between channels
+
+
+class BulkImportProgress(BaseModel):
+    status: str  # "running", "completed", "error"
+    total_channels: int
+    processed_channels: int
+    current_channel: Optional[str] = None
+    results: List[dict]
+    errors: List[str]
+
+
+# Store for bulk import jobs (in production, use Redis or similar)
+bulk_import_jobs: dict = {}
+
+
+@router.post("/bulk-import/start")
+async def start_bulk_import(request: BulkImportRequest):
+    """
+    Start bulk import of videos from multiple channels.
+    Returns a job_id to track progress.
+    """
+    import asyncio
+    import uuid
+    import time
+
+    supabase = get_supabase()
+    job_id = str(uuid.uuid4())[:8]
+
+    # Get channels to process
+    if request.channel_ids:
+        # Specific channels
+        channels_response = supabase.table("curated_channels").select("id, name").in_("id", request.channel_ids).execute()
+    else:
+        # All favorites
+        channels_response = supabase.table("curated_channels").select("id, name").eq("is_favorite", True).execute()
+
+    channels = channels_response.data or []
+
+    if not channels:
+        return {"success": False, "error": "No hay canales para importar"}
+
+    # Initialize job
+    bulk_import_jobs[job_id] = {
+        "status": "running",
+        "total_channels": len(channels),
+        "processed_channels": 0,
+        "current_channel": None,
+        "results": [],
+        "errors": [],
+        "started_at": datetime.now().isoformat()
+    }
+
+    # Start background task
+    async def run_bulk_import():
+        job = bulk_import_jobs[job_id]
+
+        for i, channel in enumerate(channels):
+            if job["status"] == "cancelled":
+                break
+
+            channel_id = channel["id"]
+            channel_name = channel["name"]
+            job["current_channel"] = channel_name
+            job["processed_channels"] = i
+
+            try:
+                # Import videos for this channel
+                import_request = ImportVideosRequest(
+                    max_videos=request.max_videos_per_channel,
+                    sort_by="date"
+                )
+
+                # Call the import function directly
+                result = await import_videos_from_channel(channel_id, import_request)
+
+                job["results"].append({
+                    "channel": channel_name,
+                    "imported": result.imported,
+                    "skipped": result.skipped,
+                    "transcripts": result.transcripts_found,
+                    "success": result.success
+                })
+
+                if not result.success and result.errors:
+                    job["errors"].extend([f"{channel_name}: {e}" for e in result.errors[:2]])
+
+            except Exception as e:
+                job["errors"].append(f"{channel_name}: {str(e)}")
+                job["results"].append({
+                    "channel": channel_name,
+                    "imported": 0,
+                    "skipped": 0,
+                    "transcripts": 0,
+                    "success": False
+                })
+
+            # Delay between channels (except for the last one)
+            if i < len(channels) - 1 and job["status"] != "cancelled":
+                await asyncio.sleep(request.delay_seconds)
+
+        job["status"] = "completed" if job["status"] != "cancelled" else "cancelled"
+        job["processed_channels"] = len(channels) if job["status"] == "completed" else job["processed_channels"]
+        job["current_channel"] = None
+
+    # Run in background
+    asyncio.create_task(run_bulk_import())
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "total_channels": len(channels),
+        "estimated_time_minutes": round((len(channels) * request.delay_seconds) / 60, 1)
+    }
+
+
+@router.get("/bulk-import/{job_id}")
+async def get_bulk_import_progress(job_id: str):
+    """Get progress of a bulk import job."""
+    if job_id not in bulk_import_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return bulk_import_jobs[job_id]
+
+
+@router.post("/bulk-import/{job_id}/cancel")
+async def cancel_bulk_import(job_id: str):
+    """Cancel a running bulk import job."""
+    if job_id not in bulk_import_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    bulk_import_jobs[job_id]["status"] = "cancelled"
+    return {"success": True, "message": "Job marked for cancellation"}
