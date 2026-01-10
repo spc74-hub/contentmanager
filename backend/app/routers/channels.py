@@ -356,6 +356,76 @@ async def get_channel_stats():
     )
 
 
+@router.get("/export")
+async def export_channels():
+    """Export all channels to CSV format."""
+    import csv
+    import io
+    from fastapi.responses import StreamingResponse
+
+    supabase = get_supabase()
+
+    # Get all channels with theme info
+    response = supabase.table("curated_channels").select(
+        "*, channel_themes(name)"
+    ).order("name").execute()
+
+    channels = response.data or []
+
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        "Nombre",
+        "Temática",
+        "Nivel",
+        "Energía",
+        "Uso",
+        "URL YouTube",
+        "Canal ID",
+        "Resuelto",
+        "Favorito",
+        "Videos Importados"
+    ])
+
+    # Data rows
+    level_map = {"intro": "Intro", "medio": "Medio", "avanzado": "Avanzado"}
+    energy_map = {"baja": "Baja", "media": "Media", "alta": "Alta"}
+    use_map = {"estudio": "Estudio", "inspiracion": "Inspiración", "ocio": "Ocio", "espiritual": "Espiritual"}
+
+    for ch in channels:
+        theme_data = ch.get("channel_themes")
+        theme_name = theme_data.get("name") if theme_data else "Sin tema"
+
+        # Construct YouTube URL if we have channel_id
+        youtube_url = ch.get("youtube_channel_url") or ch.get("youtube_url") or ""
+        if not youtube_url and ch.get("youtube_channel_id"):
+            youtube_url = f"https://www.youtube.com/channel/{ch.get('youtube_channel_id')}"
+
+        writer.writerow([
+            ch.get("name", ""),
+            theme_name,
+            level_map.get(ch.get("level", ""), ch.get("level", "")),
+            energy_map.get(ch.get("energy", ""), ch.get("energy", "")),
+            use_map.get(ch.get("use_type", ""), ch.get("use_type", "")),
+            youtube_url,
+            ch.get("youtube_channel_id", ""),
+            "Sí" if ch.get("is_resolved") else "No",
+            "Sí" if ch.get("is_favorite") else "No",
+            ch.get("total_videos_imported", 0)
+        ])
+
+    output.seek(0)
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=canales_curados.csv"}
+    )
+
+
 class AddByUrlRequest(BaseModel):
     url: str
 

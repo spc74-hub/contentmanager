@@ -495,6 +495,14 @@ export function Channels() {
             )}
             Importar Excel
           </button>
+          <a
+            href={`${apiUrl}/api/channels/export`}
+            download="canales_curados.csv"
+            className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+          >
+            <Download className="w-4 h-4" />
+            Exportar CSV
+          </a>
           <button
             onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
             className="p-2 rounded-lg border hover:bg-gray-50"
@@ -942,9 +950,9 @@ export function Channels() {
                             </div>
                           )}
                         </div>
-                        {channel.youtube_url && (
+                        {(channel.youtube_channel_url || channel.youtube_url || channel.youtube_channel_id) && (
                           <a
-                            href={channel.youtube_channel_url || channel.youtube_url}
+                            href={channel.youtube_channel_url || channel.youtube_url || `https://www.youtube.com/channel/${channel.youtube_channel_id}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="text-gray-400 hover:text-blue-600"
@@ -1053,9 +1061,9 @@ export function Channels() {
                               <span className="font-medium text-sm truncate block" title={channel.name}>
                                 {channel.name}
                               </span>
-                              {channel.youtube_url && (
+                              {(channel.youtube_channel_url || channel.youtube_url || channel.youtube_channel_id) && (
                                 <a
-                                  href={channel.youtube_channel_url || channel.youtube_url}
+                                  href={channel.youtube_channel_url || channel.youtube_url || `https://www.youtube.com/channel/${channel.youtube_channel_id}`}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-gray-400 hover:text-blue-600 flex-shrink-0"
