@@ -126,6 +126,8 @@ export function Channels() {
   const [viewMode, setViewMode] = useState<ViewMode>('grid')
   const [showFilters, setShowFilters] = useState(true)
   const [showStats, setShowStats] = useState(true)
+  const [collapsedThemes, setCollapsedThemes] = useState<Set<string>>(new Set())
+  const [allCollapsed, setAllCollapsed] = useState(true)
 
   // Filters
   const [searchInput, setSearchInput] = useState('')
@@ -150,7 +152,7 @@ export function Channels() {
       if (onlyResolved !== null) params.append('is_resolved', onlyResolved.toString())
       if (onlyFavorites !== null) params.append('is_favorite', onlyFavorites.toString())
       if (searchInput) params.append('search', searchInput)
-      params.append('limit', '500')
+      params.append('limit', '1000')
 
       const response = await fetch(`${apiUrl}/api/channels?${params}`)
       const data: ChannelsResponse = await response.json()
@@ -431,6 +433,37 @@ export function Channels() {
     })
     return grouped
   }, [channels])
+
+  // Initialize collapsed state when themes change
+  useEffect(() => {
+    if (allCollapsed) {
+      setCollapsedThemes(new Set(Object.keys(channelsByTheme)))
+    }
+  }, [Object.keys(channelsByTheme).join(',')])
+
+  const toggleThemeCollapse = (themeName: string) => {
+    setCollapsedThemes(prev => {
+      const next = new Set(prev)
+      if (next.has(themeName)) {
+        next.delete(themeName)
+      } else {
+        next.add(themeName)
+      }
+      return next
+    })
+  }
+
+  const toggleAllCollapsed = () => {
+    if (allCollapsed) {
+      // Expand all
+      setCollapsedThemes(new Set())
+      setAllCollapsed(false)
+    } else {
+      // Collapse all
+      setCollapsedThemes(new Set(Object.keys(channelsByTheme)))
+      setAllCollapsed(true)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -929,15 +962,42 @@ export function Channels() {
         </div>
       ) : (
         /* Grid View - Grouped by Theme */
-        <div className="space-y-6">
+        <div className="space-y-4">
+          {/* Expand/Collapse All Button */}
+          <div className="flex justify-end">
+            <button
+              onClick={toggleAllCollapsed}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              {allCollapsed ? (
+                <>
+                  <ChevronDown className="w-4 h-4" />
+                  Expandir todos
+                </>
+              ) : (
+                <>
+                  <ChevronUp className="w-4 h-4" />
+                  Colapsar todos
+                </>
+              )}
+            </button>
+          </div>
           {Object.entries(channelsByTheme)
             .sort(([a], [b]) => a.localeCompare(b))
-            .map(([themeName, themeChannels]) => (
+            .map(([themeName, themeChannels]) => {
+              const isCollapsed = collapsedThemes.has(themeName)
+              return (
               <div key={themeName} className="bg-white rounded-lg border shadow-sm">
-                <div className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between">
+                <div
+                  className="px-4 py-3 bg-gray-50 border-b flex items-center justify-between cursor-pointer hover:bg-gray-100 transition-colors"
+                  onClick={() => toggleThemeCollapse(themeName)}
+                >
                   <div className="flex items-center gap-3">
                     <button
-                      onClick={() => handleSelectTheme(themeName)}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleSelectTheme(themeName)
+                      }}
                       className={`w-5 h-5 rounded border flex items-center justify-center transition-colors ${
                         themeChannels.every(ch => selectedChannelIds.has(ch.id))
                           ? 'bg-indigo-600 border-indigo-600 text-white'
@@ -950,10 +1010,16 @@ export function Channels() {
                         <Check className="w-3 h-3" />
                       )}
                     </button>
+                    {isCollapsed ? (
+                      <ChevronDown className="w-4 h-4 text-gray-500" />
+                    ) : (
+                      <ChevronUp className="w-4 h-4 text-gray-500" />
+                    )}
                     <h3 className="font-medium text-gray-900">{themeName}</h3>
                   </div>
                   <span className="text-sm text-gray-500">{themeChannels.length} canales</span>
                 </div>
+                {!isCollapsed && (
                 <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-visible">
                   {themeChannels.map(channel => {
                     const UseIcon = USE_TYPE_ICONS[channel.use_type] || BookOpen
@@ -1080,8 +1146,9 @@ export function Channels() {
                     )
                   })}
                 </div>
+                )}
               </div>
-            ))}
+            )})}
         </div>
       )}
 
