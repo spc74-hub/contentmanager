@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
-  Search, Filter, Youtube, ExternalLink, Upload, RefreshCw,
-  Grid, List, ChevronDown, ChevronUp, Play, Check, X,
+  Search, Filter, Youtube, ExternalLink,
+  Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
   Edit2, Trash2, Plus, Link
 } from 'lucide-react'
