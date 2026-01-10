@@ -3,7 +3,7 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link, Star
+  Edit2, Trash2, Plus, Link, Star, Users
 } from 'lucide-react'
 
 interface ChannelTheme {
@@ -28,6 +28,7 @@ interface CuratedChannel {
   is_active: boolean
   is_resolved: boolean
   is_favorite: boolean
+  subscriber_count: number | null
   last_import_at: string | null
   total_videos_imported: number
   created_at: string | null
@@ -88,6 +89,14 @@ const ENERGY_COLORS: Record<string, string> = {
   alta: 'bg-red-100 text-red-700'
 }
 
+// Format subscriber count (e.g., 1.2M, 500K, 1.5K)
+const formatSubscribers = (count: number | null): string => {
+  if (!count) return ''
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`
+  if (count >= 1000) return `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}K`
+  return count.toString()
+}
+
 export function Channels() {
   const [channels, setChannels] = useState<CuratedChannel[]>([])
   const [themes, setThemes] = useState<ChannelTheme[]>([])
@@ -125,6 +134,30 @@ export function Channels() {
     errors: string[]
   } | null>(null)
   const [showBulkFavoritesModal, setShowBulkFavoritesModal] = useState(false)
+
+  // Update subscribers state
+  const [updateSubsJobId, setUpdateSubsJobId] = useState<string | null>(null)
+  const [updateSubsProgress, setUpdateSubsProgress] = useState<{
+    status: string
+    total_channels: number
+    processed_channels: number
+    current_channel: string | null
+    results: { channel: string; subscribers: number; success: boolean }[]
+    errors: string[]
+  } | null>(null)
+  const [showUpdateSubsModal, setShowUpdateSubsModal] = useState(false)
+
+  // Resolve search URLs state
+  const [resolveUrlsJobId, setResolveUrlsJobId] = useState<string | null>(null)
+  const [resolveUrlsProgress, setResolveUrlsProgress] = useState<{
+    status: string
+    total_channels: number
+    processed_channels: number
+    current_channel: string | null
+    results: { channel: string; resolved_to: string | null; success: boolean }[]
+    errors: string[]
+  } | null>(null)
+  const [showResolveUrlsModal, setShowResolveUrlsModal] = useState(false)
 
   // Edit/Delete/Add modals
   const [editingChannel, setEditingChannel] = useState<CuratedChannel | null>(null)
@@ -503,6 +536,134 @@ export function Channels() {
     setBulkFavoritesProgress(null)
   }
 
+  // Start update subscribers
+  const startUpdateSubscribers = async (onlyMissing: boolean = true) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/update-subscribers/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          only_missing: onlyMissing,
+          only_favorites: false,
+          delay_seconds: 5
+        })
+      })
+      const result = await response.json()
+      if (result.success) {
+        setUpdateSubsJobId(result.job_id)
+        setShowUpdateSubsModal(true)
+        pollUpdateSubsProgress(result.job_id)
+      } else {
+        alert(result.error || 'Error al iniciar actualización')
+      }
+    } catch (error) {
+      console.error('Error starting subscriber update:', error)
+      alert('Error al iniciar actualización de suscriptores')
+    }
+  }
+
+  // Poll for update subscribers progress
+  const pollUpdateSubsProgress = async (jobId: string) => {
+    const poll = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/channels/bulk-import/${jobId}`)
+        const progress = await response.json()
+        setUpdateSubsProgress(progress)
+
+        if (progress.status === 'running') {
+          setTimeout(poll, 2000)
+        } else {
+          fetchChannels()
+          fetchStats()
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error)
+      }
+    }
+    poll()
+  }
+
+  // Cancel update subscribers
+  const cancelUpdateSubs = async () => {
+    if (!updateSubsJobId) return
+    try {
+      await fetch(`${apiUrl}/api/channels/bulk-import/${updateSubsJobId}/cancel`, {
+        method: 'POST'
+      })
+    } catch (error) {
+      console.error('Error cancelling:', error)
+    }
+  }
+
+  // Close update subs modal
+  const closeUpdateSubsModal = () => {
+    setShowUpdateSubsModal(false)
+    setUpdateSubsJobId(null)
+    setUpdateSubsProgress(null)
+  }
+
+  // Start resolve search URLs
+  const startResolveUrls = async () => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/resolve-search-urls/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delay_seconds: 3 })
+      })
+      const result = await response.json()
+      if (result.success) {
+        setResolveUrlsJobId(result.job_id)
+        setShowResolveUrlsModal(true)
+        pollResolveUrlsProgress(result.job_id)
+      } else {
+        alert(result.error || 'Error al iniciar resolución de URLs')
+      }
+    } catch (error) {
+      console.error('Error starting URL resolution:', error)
+      alert('Error al iniciar resolución de URLs')
+    }
+  }
+
+  // Poll for resolve URLs progress
+  const pollResolveUrlsProgress = async (jobId: string) => {
+    const poll = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/api/channels/bulk-import/${jobId}`)
+        const progress = await response.json()
+        setResolveUrlsProgress(progress)
+
+        if (progress.status === 'running') {
+          setTimeout(poll, 2000)
+        } else {
+          fetchChannels()
+          fetchStats()
+        }
+      } catch (error) {
+        console.error('Error polling progress:', error)
+      }
+    }
+    poll()
+  }
+
+  // Cancel resolve URLs
+  const cancelResolveUrls = async () => {
+    if (!resolveUrlsJobId) return
+    try {
+      await fetch(`${apiUrl}/api/channels/bulk-import/${resolveUrlsJobId}/cancel`, {
+        method: 'POST'
+      })
+    } catch (error) {
+      console.error('Error cancelling:', error)
+    }
+  }
+
+  // Close resolve URLs modal
+  const closeResolveUrlsModal = () => {
+    setShowResolveUrlsModal(false)
+    setResolveUrlsJobId(null)
+    setResolveUrlsProgress(null)
+  }
+
   // Group channels by theme for grid view
   const channelsByTheme = useMemo(() => {
     const grouped: Record<string, CuratedChannel[]> = {}
@@ -512,6 +673,22 @@ export function Channels() {
       grouped[theme].push(ch)
     })
     return grouped
+  }, [channels])
+
+  // Calculate total subscribers per theme
+  const subscribersByTheme = useMemo(() => {
+    const result: Record<string, number> = {}
+    channels.forEach(ch => {
+      const theme = ch.theme_name || 'Sin tema'
+      if (!result[theme]) result[theme] = 0
+      result[theme] += ch.subscriber_count || 0
+    })
+    return result
+  }, [channels])
+
+  // Total subscribers across all channels
+  const totalSubscribers = useMemo(() => {
+    return channels.reduce((sum, ch) => sum + (ch.subscriber_count || 0), 0)
   }, [channels])
 
   // Initialize collapsed state when themes change
@@ -583,6 +760,24 @@ export function Channels() {
           >
             <Star className="w-4 h-4" />
             Importar Favoritos
+          </button>
+          <button
+            onClick={() => startUpdateSubscribers(true)}
+            disabled={updateSubsJobId !== null}
+            className="flex items-center gap-2 px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50"
+            title="Actualiza el número de suscriptores de canales sin datos"
+          >
+            <Users className="w-4 h-4" />
+            Actualizar Subs
+          </button>
+          <button
+            onClick={startResolveUrls}
+            disabled={resolveUrlsJobId !== null}
+            className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            title="Resuelve URLs de búsqueda a URLs reales de canal"
+          >
+            <Link className="w-4 h-4" />
+            Resolver URLs
           </button>
           <a
             href={`${apiUrl}/api/channels/export`}
@@ -740,10 +935,14 @@ export function Channels() {
 
           {showStats && (
             <div className="p-4 pt-0 border-t">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
                 <div className="text-center p-3 bg-blue-50 rounded-lg">
                   <p className="text-2xl font-bold text-blue-600">{stats.total_channels}</p>
                   <p className="text-xs text-gray-500">Total Canales</p>
+                </div>
+                <div className="text-center p-3 bg-teal-50 rounded-lg">
+                  <p className="text-2xl font-bold text-teal-600">{formatSubscribers(totalSubscribers)}</p>
+                  <p className="text-xs text-gray-500">Total Suscriptores</p>
                 </div>
                 <div className="text-center p-3 bg-green-50 rounded-lg">
                   <p className="text-2xl font-bold text-green-600">{stats.resolved_channels}</p>
@@ -956,6 +1155,7 @@ export function Channels() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Canal</th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tema</th>
+                <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Subs</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Nivel</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Energía</th>
                 <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Uso</th>
@@ -982,6 +1182,9 @@ export function Channels() {
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {channel.theme_name || '-'}
+                    </td>
+                    <td className="px-4 py-3 text-center text-sm text-gray-600">
+                      {channel.subscriber_count ? formatSubscribers(channel.subscriber_count) : '-'}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className={`text-xs px-2 py-1 rounded ${LEVEL_COLORS[channel.level]}`}>
@@ -1114,7 +1317,15 @@ export function Channels() {
                     )}
                     <h3 className="font-medium text-gray-900">{themeName}</h3>
                   </div>
-                  <span className="text-sm text-gray-500">{themeChannels.length} canales</span>
+                  <div className="flex items-center gap-4 text-sm text-gray-500">
+                    {subscribersByTheme[themeName] > 0 && (
+                      <span className="flex items-center gap-1 text-teal-600">
+                        <Users className="w-3 h-3" />
+                        {formatSubscribers(subscribersByTheme[themeName])}
+                      </span>
+                    )}
+                    <span>{themeChannels.length} canales</span>
+                  </div>
                 </div>
                 {!isCollapsed && (
                 <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-visible">
@@ -1161,6 +1372,9 @@ export function Channels() {
                                 </a>
                               )}
                             </div>
+                            {channel.subscriber_count && (
+                              <span className="text-xs text-gray-500">{formatSubscribers(channel.subscriber_count)} subs</span>
+                            )}
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1 mb-2">
@@ -1498,6 +1712,240 @@ export function Channels() {
               ) : (
                 <button
                   onClick={closeBulkFavoritesModal}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                >
+                  Cerrar
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Update Subscribers Progress */}
+      {showUpdateSubsModal && updateSubsProgress && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Users className="w-5 h-5 text-teal-600" />
+                Actualizando Suscriptores
+              </h3>
+              {updateSubsProgress.status === 'completed' || updateSubsProgress.status === 'cancelled' ? (
+                <button onClick={closeUpdateSubsModal} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              ) : null}
+            </div>
+
+            {/* Progress bar */}
+            <div className="mb-4">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>
+                  {updateSubsProgress.status === 'running' ? (
+                    <>Procesando: {updateSubsProgress.current_channel || '...'}</>
+                  ) : updateSubsProgress.status === 'completed' ? (
+                    'Completado'
+                  ) : (
+                    'Cancelado'
+                  )}
+                </span>
+                <span>{updateSubsProgress.processed_channels} / {updateSubsProgress.total_channels}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className={`h-3 rounded-full transition-all ${
+                    updateSubsProgress.status === 'completed' ? 'bg-green-500' :
+                    updateSubsProgress.status === 'cancelled' ? 'bg-orange-500' :
+                    'bg-teal-500'
+                  }`}
+                  style={{ width: `${(updateSubsProgress.processed_channels / updateSubsProgress.total_channels) * 100}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Results list */}
+            {updateSubsProgress.results.length > 0 && (
+              <div className="max-h-48 overflow-y-auto mb-4 border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Canal</th>
+                      <th className="text-center px-2 py-2">Suscriptores</th>
+                      <th className="text-center px-2 py-2">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {updateSubsProgress.results.map((r, i) => (
+                      <tr key={i} className={r.success ? '' : 'bg-red-50'}>
+                        <td className="px-3 py-1.5 truncate max-w-[200px]" title={r.channel}>{r.channel}</td>
+                        <td className="text-center px-2 py-1.5">
+                          {r.success ? formatSubscribers(r.subscribers) : '-'}
+                        </td>
+                        <td className="text-center px-2 py-1.5">
+                          {r.success ? (
+                            <Check className="w-4 h-4 text-green-600 mx-auto" />
+                          ) : (
+                            <X className="w-4 h-4 text-red-600 mx-auto" />
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Summary */}
+            {updateSubsProgress.status !== 'running' && (
+              <div className="bg-gray-50 rounded-lg p-3 mb-4">
+                <div className="grid grid-cols-2 text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-teal-600">
+                      {formatSubscribers(updateSubsProgress.results.filter(r => r.success).reduce((sum, r) => sum + r.subscribers, 0))}
+                    </div>
+                    <div className="text-xs text-gray-500">Total Suscriptores</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-green-600">
+                      {updateSubsProgress.results.filter(r => r.success).length}
+                    </div>
+                    <div className="text-xs text-gray-500">Canales Actualizados</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              {updateSubsProgress.status === 'running' ? (
+                <button
+                  onClick={cancelUpdateSubs}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                >
+                  <X className="w-4 h-4" />
+                  Cancelar
+                </button>
+              ) : (
+                <button
+                  onClick={closeUpdateSubsModal}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+                >
+                  Cerrar
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Resolve Search URLs Progress */}
+      {showResolveUrlsModal && resolveUrlsProgress && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Link className="w-5 h-5 text-purple-600" />
+                Resolviendo URLs de Búsqueda
+              </h3>
+              {resolveUrlsProgress.status === 'completed' || resolveUrlsProgress.status === 'cancelled' ? (
+                <button onClick={closeResolveUrlsModal} className="text-gray-400 hover:text-gray-600">
+                  <X className="w-5 h-5" />
+                </button>
+              ) : null}
+            </div>
+
+            {/* Progress bar */}
+            <div className="mb-4">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>
+                  {resolveUrlsProgress.status === 'running' ? (
+                    <>Procesando: {resolveUrlsProgress.current_channel || '...'}</>
+                  ) : resolveUrlsProgress.status === 'completed' ? (
+                    'Completado'
+                  ) : (
+                    'Cancelado'
+                  )}
+                </span>
+                <span>{resolveUrlsProgress.processed_channels} / {resolveUrlsProgress.total_channels}</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div
+                  className={`h-3 rounded-full transition-all ${
+                    resolveUrlsProgress.status === 'completed' ? 'bg-green-500' :
+                    resolveUrlsProgress.status === 'cancelled' ? 'bg-orange-500' :
+                    'bg-purple-500'
+                  }`}
+                  style={{ width: `${(resolveUrlsProgress.processed_channels / resolveUrlsProgress.total_channels) * 100}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Results list */}
+            {resolveUrlsProgress.results.length > 0 && (
+              <div className="max-h-48 overflow-y-auto mb-4 border rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2">Canal</th>
+                      <th className="text-left px-2 py-2">Resuelto a</th>
+                      <th className="text-center px-2 py-2">Estado</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {resolveUrlsProgress.results.map((r, i) => (
+                      <tr key={i} className={r.success ? '' : 'bg-red-50'}>
+                        <td className="px-3 py-1.5 truncate max-w-[150px]" title={r.channel}>{r.channel}</td>
+                        <td className="px-2 py-1.5 truncate max-w-[150px] text-gray-600" title={r.resolved_to || ''}>
+                          {r.success ? r.resolved_to : '-'}
+                        </td>
+                        <td className="text-center px-2 py-1.5">
+                          {r.success ? (
+                            <Check className="w-4 h-4 text-green-600 mx-auto" />
+                          ) : (
+                            <X className="w-4 h-4 text-red-600 mx-auto" />
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Summary */}
+            {resolveUrlsProgress.status !== 'running' && (
+              <div className="bg-gray-50 rounded-lg p-3 mb-4">
+                <div className="grid grid-cols-2 text-center">
+                  <div>
+                    <div className="text-2xl font-bold text-green-600">
+                      {resolveUrlsProgress.results.filter(r => r.success).length}
+                    </div>
+                    <div className="text-xs text-gray-500">URLs Resueltas</div>
+                  </div>
+                  <div>
+                    <div className="text-2xl font-bold text-red-600">
+                      {resolveUrlsProgress.results.filter(r => !r.success).length}
+                    </div>
+                    <div className="text-xs text-gray-500">Fallidas</div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              {resolveUrlsProgress.status === 'running' ? (
+                <button
+                  onClick={cancelResolveUrls}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700"
+                >
+                  <X className="w-4 h-4" />
+                  Cancelar
+                </button>
+              ) : (
+                <button
+                  onClick={closeResolveUrlsModal}
                   className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
                 >
                   Cerrar

@@ -10,6 +10,10 @@ from datetime import datetime
 import os
 import re
 import tempfile
+import uuid
+import asyncio
+import subprocess
+import json
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -45,6 +49,7 @@ class CuratedChannel(BaseModel):
     is_active: bool = True
     is_resolved: bool = False
     is_favorite: bool = False
+    subscriber_count: Optional[int] = None
     last_import_at: Optional[str] = None
     total_videos_imported: int = 0
     created_at: Optional[str] = None
@@ -973,11 +978,41 @@ async def import_videos_from_channel(channel_id: int, request: ImportVideosReque
                 if len(errors) > 10:
                     break
 
-        # Update channel stats
-        supabase.table("curated_channels").update({
+        # Try to get channel info (subscriber count, thumbnail)
+        channel_update_data = {
             "last_import_at": datetime.now().isoformat(),
             "total_videos_imported": channel.get("total_videos_imported", 0) + imported
-        }).eq("id", channel_id).execute()
+        }
+
+        # Get subscriber count from channel page
+        try:
+            channel_info_result = subprocess.run(
+                [
+                    "yt-dlp",
+                    "--dump-json",
+                    "--playlist-items", "0",
+                    "--no-warnings",
+                    f"https://www.youtube.com/channel/{youtube_channel_id}"
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if channel_info_result.returncode == 0 and channel_info_result.stdout:
+                channel_info = json.loads(channel_info_result.stdout)
+                subscriber_count = channel_info.get("channel_follower_count")
+                if subscriber_count:
+                    channel_update_data["subscriber_count"] = subscriber_count
+                    print(f"[Channels] {channel_name} has {subscriber_count:,} subscribers")
+                # Get channel thumbnail
+                channel_thumbnail = channel_info.get("thumbnail")
+                if channel_thumbnail and not channel.get("thumbnail"):
+                    channel_update_data["thumbnail"] = channel_thumbnail
+        except Exception as e:
+            print(f"[Channels] Could not get channel info: {e}")
+
+        # Update channel stats
+        supabase.table("curated_channels").update(channel_update_data).eq("id", channel_id).execute()
 
         print(f"[Channels] Imported {imported}, skipped {skipped}, transcripts {transcripts_found}")
 
@@ -1146,3 +1181,271 @@ async def cancel_bulk_import(job_id: str):
 
     bulk_import_jobs[job_id]["status"] = "cancelled"
     return {"success": True, "message": "Job marked for cancellation"}
+
+
+# ============== Update Subscriber Counts ==============
+
+class UpdateSubscribersRequest(BaseModel):
+    only_missing: bool = True  # Only update channels without subscriber_count
+    only_favorites: bool = False  # Only update favorite channels
+    delay_seconds: int = 5  # Delay between API calls to avoid rate limiting
+
+
+@router.post("/update-subscribers/start")
+async def start_update_subscribers(request: UpdateSubscribersRequest):
+    """
+    Start updating subscriber counts for channels.
+    Returns a job_id to track progress.
+    """
+    import asyncio
+    import uuid
+
+    supabase = get_supabase()
+    job_id = f"subs-{str(uuid.uuid4())[:6]}"
+
+    # Build query for channels to update
+    query = supabase.table("curated_channels").select("id, name, youtube_channel_id, youtube_url")
+
+    if request.only_missing:
+        query = query.is_("subscriber_count", "null")
+    if request.only_favorites:
+        query = query.eq("is_favorite", True)
+
+    # Only channels with youtube_url or youtube_channel_id
+    query = query.not_.is_("youtube_url", "null")
+
+    channels_response = query.execute()
+    channels = channels_response.data or []
+
+    if not channels:
+        return {"success": False, "error": "No hay canales para actualizar"}
+
+    # Initialize job
+    bulk_import_jobs[job_id] = {
+        "status": "running",
+        "total_channels": len(channels),
+        "processed_channels": 0,
+        "current_channel": None,
+        "results": [],
+        "errors": [],
+        "started_at": datetime.now().isoformat()
+    }
+
+    async def run_update_subscribers():
+        job = bulk_import_jobs[job_id]
+
+        for i, channel in enumerate(channels):
+            if job["status"] == "cancelled":
+                break
+
+            channel_id = channel["id"]
+            channel_name = channel["name"]
+            youtube_channel_id = channel.get("youtube_channel_id")
+            youtube_url = channel.get("youtube_url")
+
+            job["current_channel"] = channel_name
+            job["processed_channels"] = i
+
+            # Determine the URL to use
+            if youtube_channel_id:
+                target_url = f"https://www.youtube.com/channel/{youtube_channel_id}"
+            elif youtube_url and "/results?" not in youtube_url:
+                # Skip search URLs - they don't work with yt-dlp
+                target_url = youtube_url
+            else:
+                reason = "URL de búsqueda (no válida)" if youtube_url and "/results?" in youtube_url else "No tiene URL de YouTube"
+                job["errors"].append(f"{channel_name}: {reason}")
+                job["results"].append({"channel": channel_name, "subscribers": 0, "success": False})
+                continue
+
+            try:
+                # Get subscriber count from YouTube (use playlist-items 1 to get first video info)
+                result = subprocess.run(
+                    [
+                        "yt-dlp",
+                        "--dump-json",
+                        "--playlist-items", "1",
+                        "--no-warnings",
+                        target_url
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                subscriber_count = None
+                resolved_channel_id = None
+                if result.returncode == 0 and result.stdout:
+                    channel_info = json.loads(result.stdout)
+                    subscriber_count = channel_info.get("channel_follower_count")
+                    resolved_channel_id = channel_info.get("channel_id")
+
+                if subscriber_count:
+                    # Update in database - also save channel_id if we got it
+                    update_data = {"subscriber_count": subscriber_count}
+                    if resolved_channel_id and not youtube_channel_id:
+                        update_data["youtube_channel_id"] = resolved_channel_id
+                        update_data["is_resolved"] = True
+                    supabase.table("curated_channels").update(update_data).eq("id", channel_id).execute()
+
+                    job["results"].append({
+                        "channel": channel_name,
+                        "subscribers": subscriber_count,
+                        "success": True
+                    })
+                else:
+                    job["results"].append({
+                        "channel": channel_name,
+                        "subscribers": 0,
+                        "success": False
+                    })
+                    job["errors"].append(f"{channel_name}: No se pudo obtener suscriptores")
+
+            except Exception as e:
+                job["errors"].append(f"{channel_name}: {str(e)}")
+                job["results"].append({
+                    "channel": channel_name,
+                    "subscribers": 0,
+                    "success": False
+                })
+
+            # Delay between API calls
+            if i < len(channels) - 1 and job["status"] != "cancelled":
+                await asyncio.sleep(request.delay_seconds)
+
+        job["status"] = "completed" if job["status"] != "cancelled" else "cancelled"
+        job["processed_channels"] = len(channels) if job["status"] == "completed" else job["processed_channels"]
+        job["current_channel"] = None
+
+    # Run in background
+    asyncio.create_task(run_update_subscribers())
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "total_channels": len(channels),
+        "estimated_time_minutes": round((len(channels) * request.delay_seconds) / 60, 1)
+    }
+
+
+class ResolveSearchUrlsRequest(BaseModel):
+    delay_seconds: float = 2.0
+
+
+@router.post("/resolve-search-urls/start")
+async def start_resolve_search_urls(request: ResolveSearchUrlsRequest):
+    """Resolve search URLs to real channel URLs using YouTube search"""
+    supabase = get_supabase()
+    job_id = f"resolve-{str(uuid.uuid4())[:6]}"
+
+    # Get channels with search URLs
+    channels_response = supabase.table("curated_channels").select(
+        "id, name, youtube_url"
+    ).like("youtube_url", "%/results?%").execute()
+
+    channels = channels_response.data or []
+
+    if not channels:
+        return {"success": False, "error": "No hay canales con URLs de búsqueda para resolver"}
+
+    # Initialize job
+    bulk_import_jobs[job_id] = {
+        "status": "running",
+        "total_channels": len(channels),
+        "processed_channels": 0,
+        "current_channel": None,
+        "results": [],
+        "errors": [],
+        "started_at": datetime.now().isoformat()
+    }
+
+    async def run_resolve_urls():
+        job = bulk_import_jobs[job_id]
+
+        for i, channel in enumerate(channels):
+            if job["status"] == "cancelled":
+                break
+
+            channel_id = channel["id"]
+            channel_name = channel["name"]
+
+            job["current_channel"] = channel_name
+            job["processed_channels"] = i
+
+            try:
+                # Search YouTube for the channel
+                search_query = f"ytsearch1:{channel_name} channel"
+                result = subprocess.run(
+                    [
+                        "yt-dlp",
+                        "--dump-json",
+                        "--no-warnings",
+                        search_query
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+
+                if result.returncode == 0 and result.stdout:
+                    video_info = json.loads(result.stdout)
+                    resolved_channel_id = video_info.get("channel_id")
+                    uploader_url = video_info.get("uploader_url")
+                    channel_found = video_info.get("channel")
+
+                    if resolved_channel_id:
+                        # Update in database
+                        update_data = {
+                            "youtube_channel_id": resolved_channel_id,
+                            "is_resolved": True
+                        }
+                        if uploader_url:
+                            update_data["youtube_url"] = uploader_url
+
+                        supabase.table("curated_channels").update(update_data).eq("id", channel_id).execute()
+
+                        job["results"].append({
+                            "channel": channel_name,
+                            "resolved_to": channel_found or uploader_url,
+                            "success": True
+                        })
+                    else:
+                        job["results"].append({
+                            "channel": channel_name,
+                            "resolved_to": None,
+                            "success": False
+                        })
+                        job["errors"].append(f"{channel_name}: No se encontró canal")
+                else:
+                    job["results"].append({
+                        "channel": channel_name,
+                        "resolved_to": None,
+                        "success": False
+                    })
+                    job["errors"].append(f"{channel_name}: Error en búsqueda")
+
+            except Exception as e:
+                job["errors"].append(f"{channel_name}: {str(e)}")
+                job["results"].append({
+                    "channel": channel_name,
+                    "resolved_to": None,
+                    "success": False
+                })
+
+            # Delay between API calls
+            if i < len(channels) - 1 and job["status"] != "cancelled":
+                await asyncio.sleep(request.delay_seconds)
+
+        job["status"] = "completed" if job["status"] != "cancelled" else "cancelled"
+        job["processed_channels"] = len(channels) if job["status"] == "completed" else job["processed_channels"]
+        job["current_channel"] = None
+
+    # Run in background
+    asyncio.create_task(run_resolve_urls())
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "total_channels": len(channels),
+        "estimated_time_minutes": round((len(channels) * request.delay_seconds) / 60, 1)
+    }
