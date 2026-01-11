@@ -77,12 +77,32 @@ class ChannelUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_resolved: Optional[bool] = None
     is_favorite: Optional[bool] = None
+    subscriber_count: Optional[int] = None
 
 
 class ChannelsResponse(BaseModel):
     channels: List[CuratedChannel]
     total: int
     themes: List[ChannelTheme]
+
+
+# ============== Tag Models ==============
+
+class ChannelTag(BaseModel):
+    id: int
+    name: str
+    color: str = "#6B7280"
+    created_at: Optional[str] = None
+
+
+class TagCreate(BaseModel):
+    name: str
+    color: str = "#6B7280"
+
+
+class TagUpdate(BaseModel):
+    name: Optional[str] = None
+    color: Optional[str] = None
 
 
 class ImportExcelRequest(BaseModel):
@@ -431,6 +451,97 @@ async def export_channels():
     )
 
 
+# ============== Tag Endpoints ==============
+
+@router.get("/tags", response_model=List[ChannelTag])
+async def get_tags():
+    """Get all channel tags."""
+    supabase = get_supabase()
+    response = supabase.table("channel_tags").select("*").order("name").execute()
+    return response.data or []
+
+
+@router.post("/tags", response_model=ChannelTag)
+async def create_tag(tag: TagCreate):
+    """Create a new tag."""
+    supabase = get_supabase()
+
+    # Check if tag name already exists
+    existing = supabase.table("channel_tags").select("id").eq("name", tag.name).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail="Tag already exists")
+
+    response = supabase.table("channel_tags").insert({
+        "name": tag.name,
+        "color": tag.color
+    }).execute()
+
+    return response.data[0]
+
+
+@router.put("/tags/{tag_id}", response_model=ChannelTag)
+async def update_tag(tag_id: int, tag: TagUpdate):
+    """Update a tag."""
+    supabase = get_supabase()
+
+    data = tag.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    response = supabase.table("channel_tags").update(data).eq("id", tag_id).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    return response.data[0]
+
+
+@router.delete("/tags/{tag_id}")
+async def delete_tag(tag_id: int):
+    """Delete a tag."""
+    supabase = get_supabase()
+
+    response = supabase.table("channel_tags").delete().eq("id", tag_id).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Tag not found")
+
+    return {"success": True, "deleted_id": tag_id}
+
+
+@router.get("/by-tag/{tag_id}")
+async def get_channels_by_tag(tag_id: int):
+    """Get all channels with a specific tag."""
+    supabase = get_supabase()
+
+    # Get channel IDs with this tag
+    assignments = supabase.table("channel_tag_assignments").select(
+        "channel_id"
+    ).eq("tag_id", tag_id).execute()
+
+    channel_ids = [a["channel_id"] for a in assignments.data or []]
+
+    if not channel_ids:
+        return {"channels": [], "total": 0}
+
+    # Get channels
+    response = supabase.table("curated_channels").select(
+        "*, channel_themes(name)"
+    ).in_("id", channel_ids).execute()
+
+    channels = []
+    for ch in response.data or []:
+        theme_name = None
+        if ch.get("channel_themes"):
+            theme_name = ch["channel_themes"].get("name")
+        ch["theme_name"] = theme_name
+        if "channel_themes" in ch:
+            del ch["channel_themes"]
+        channels.append(ch)
+
+    return {"channels": channels, "total": len(channels)}
+
+
 class AddByUrlRequest(BaseModel):
     url: str
 
@@ -768,6 +879,56 @@ async def get_channel(channel_id: int):
     ch["theme_name"] = theme_data.get("name") if theme_data else None
 
     return CuratedChannel(**ch)
+
+
+@router.get("/{channel_id}/tags", response_model=List[ChannelTag])
+async def get_channel_tags(channel_id: int):
+    """Get tags for a specific channel."""
+    supabase = get_supabase()
+
+    response = supabase.table("channel_tag_assignments").select(
+        "tag_id, channel_tags(id, name, color, created_at)"
+    ).eq("channel_id", channel_id).execute()
+
+    tags = []
+    for assignment in response.data or []:
+        if assignment.get("channel_tags"):
+            tags.append(assignment["channel_tags"])
+
+    return tags
+
+
+@router.post("/{channel_id}/tags/{tag_id}")
+async def assign_tag_to_channel(channel_id: int, tag_id: int):
+    """Assign a tag to a channel."""
+    supabase = get_supabase()
+
+    # Check if already assigned
+    existing = supabase.table("channel_tag_assignments").select("*").eq(
+        "channel_id", channel_id
+    ).eq("tag_id", tag_id).execute()
+
+    if existing.data:
+        return {"success": True, "message": "Tag already assigned"}
+
+    supabase.table("channel_tag_assignments").insert({
+        "channel_id": channel_id,
+        "tag_id": tag_id
+    }).execute()
+
+    return {"success": True}
+
+
+@router.delete("/{channel_id}/tags/{tag_id}")
+async def remove_tag_from_channel(channel_id: int, tag_id: int):
+    """Remove a tag from a channel."""
+    supabase = get_supabase()
+
+    supabase.table("channel_tag_assignments").delete().eq(
+        "channel_id", channel_id
+    ).eq("tag_id", tag_id).execute()
+
+    return {"success": True}
 
 
 class ImportVideosRequest(BaseModel):

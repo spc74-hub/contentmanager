@@ -3,7 +3,7 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link, Star, Users
+  Edit2, Trash2, Plus, Link, Star, Users, Tag, Settings
 } from 'lucide-react'
 
 interface ChannelTheme {
@@ -47,6 +47,13 @@ interface ChannelStats {
   by_level: Record<string, number>
   by_energy: Record<string, number>
   by_use_type: Record<string, number>
+}
+
+interface ChannelTagType {
+  id: number
+  name: string
+  color: string
+  created_at?: string
 }
 
 type ViewMode = 'grid' | 'list'
@@ -182,6 +189,15 @@ export function Channels() {
   const [selectedUseType, setSelectedUseType] = useState<string | null>(null)
   const [onlyResolved, setOnlyResolved] = useState<boolean | null>(null)
   const [onlyFavorites, setOnlyFavorites] = useState<boolean | null>(null)
+  const [selectedTagId, setSelectedTagId] = useState<number | null>(null)
+
+  // Tags state
+  const [availableTags, setAvailableTags] = useState<ChannelTagType[]>([])
+  const [channelTags, setChannelTags] = useState<Record<number, ChannelTagType[]>>({})
+  const [showTagsModal, setShowTagsModal] = useState(false)
+  const [editingTagsForChannel, setEditingTagsForChannel] = useState<CuratedChannel | null>(null)
+  const [newTagName, setNewTagName] = useState('')
+  const [newTagColor, setNewTagColor] = useState('#6B7280')
 
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -189,18 +205,49 @@ export function Channels() {
   const fetchChannels = async () => {
     setIsLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (selectedTheme) params.append('theme_id', selectedTheme.toString())
-      if (selectedLevel) params.append('level', selectedLevel)
-      if (selectedEnergy) params.append('energy', selectedEnergy)
-      if (selectedUseType) params.append('use_type', selectedUseType)
-      if (onlyResolved !== null) params.append('is_resolved', onlyResolved.toString())
-      if (onlyFavorites !== null) params.append('is_favorite', onlyFavorites.toString())
-      if (searchInput) params.append('search', searchInput)
-      params.append('limit', '1000')
+      let data: ChannelsResponse
 
-      const response = await fetch(`${apiUrl}/api/channels?${params}`)
-      const data: ChannelsResponse = await response.json()
+      if (selectedTagId) {
+        // Fetch channels by tag first, then apply other filters client-side
+        const tagResponse = await fetch(`${apiUrl}/api/channels/by-tag/${selectedTagId}`)
+        const tagChannels: CuratedChannel[] = await tagResponse.json()
+
+        // Apply other filters client-side
+        let filtered = tagChannels
+        if (selectedTheme) filtered = filtered.filter(ch => ch.theme_id === selectedTheme)
+        if (selectedLevel) filtered = filtered.filter(ch => ch.level === selectedLevel)
+        if (selectedEnergy) filtered = filtered.filter(ch => ch.energy === selectedEnergy)
+        if (selectedUseType) filtered = filtered.filter(ch => ch.use_type === selectedUseType)
+        if (onlyResolved !== null) filtered = filtered.filter(ch => ch.is_resolved === onlyResolved)
+        if (onlyFavorites !== null) filtered = filtered.filter(ch => ch.is_favorite === onlyFavorites)
+        if (searchInput) {
+          const search = searchInput.toLowerCase()
+          filtered = filtered.filter(ch => ch.name.toLowerCase().includes(search))
+        }
+
+        // Get themes from regular endpoint
+        const themesResponse = await fetch(`${apiUrl}/api/channels?limit=1`)
+        const themesData: ChannelsResponse = await themesResponse.json()
+
+        data = {
+          channels: filtered,
+          total: filtered.length,
+          themes: themesData.themes
+        }
+      } else {
+        const params = new URLSearchParams()
+        if (selectedTheme) params.append('theme_id', selectedTheme.toString())
+        if (selectedLevel) params.append('level', selectedLevel)
+        if (selectedEnergy) params.append('energy', selectedEnergy)
+        if (selectedUseType) params.append('use_type', selectedUseType)
+        if (onlyResolved !== null) params.append('is_resolved', onlyResolved.toString())
+        if (onlyFavorites !== null) params.append('is_favorite', onlyFavorites.toString())
+        if (searchInput) params.append('search', searchInput)
+        params.append('limit', '1000')
+
+        const response = await fetch(`${apiUrl}/api/channels?${params}`)
+        data = await response.json()
+      }
 
       setChannels(data.channels)
       setThemes(data.themes)
@@ -223,16 +270,92 @@ export function Channels() {
     }
   }
 
+  // Fetch available tags
+  const fetchTags = async () => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/tags`)
+      const data: ChannelTagType[] = await response.json()
+      setAvailableTags(data)
+    } catch (error) {
+      console.error('Error fetching tags:', error)
+    }
+  }
+
+  // Fetch tags for a specific channel
+  const fetchChannelTags = async (channelId: number) => {
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/${channelId}/tags`)
+      const data: ChannelTagType[] = await response.json()
+      setChannelTags(prev => ({ ...prev, [channelId]: data }))
+    } catch (error) {
+      console.error('Error fetching channel tags:', error)
+    }
+  }
+
+
+  // Create a new tag
+  const createTag = async () => {
+    if (!newTagName.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/tags`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newTagName.trim(), color: newTagColor })
+      })
+      if (response.ok) {
+        setNewTagName('')
+        setNewTagColor('#6B7280')
+        fetchTags()
+      }
+    } catch (error) {
+      console.error('Error creating tag:', error)
+    }
+  }
+
+  // Delete a tag
+  const deleteTag = async (tagId: number) => {
+    try {
+      await fetch(`${apiUrl}/api/channels/tags/${tagId}`, { method: 'DELETE' })
+      fetchTags()
+    } catch (error) {
+      console.error('Error deleting tag:', error)
+    }
+  }
+
+  // Assign tag to channel
+  const assignTagToChannel = async (channelId: number, tagId: number) => {
+    try {
+      await fetch(`${apiUrl}/api/channels/${channelId}/tags/${tagId}`, { method: 'POST' })
+      fetchChannelTags(channelId)
+    } catch (error) {
+      console.error('Error assigning tag:', error)
+    }
+  }
+
+  // Remove tag from channel
+  const removeTagFromChannel = async (channelId: number, tagId: number) => {
+    try {
+      await fetch(`${apiUrl}/api/channels/${channelId}/tags/${tagId}`, { method: 'DELETE' })
+      fetchChannelTags(channelId)
+    } catch (error) {
+      console.error('Error removing tag:', error)
+    }
+  }
+
   useEffect(() => {
     fetchChannels()
     fetchStats()
-  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, onlyResolved, onlyFavorites])
+    fetchTags()
+  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, onlyResolved, onlyFavorites, selectedTagId])
 
   // Debounced search
   useEffect(() => {
     const timer = setTimeout(fetchChannels, 300)
     return () => clearTimeout(timer)
   }, [searchInput])
+
+  // Don't auto-fetch tags for all channels - too many requests
+  // Tags are fetched on-demand when opening the tag assignment modal
 
   // Close import menu on click outside
   useEffect(() => {
@@ -373,9 +496,10 @@ export function Channels() {
     setSelectedUseType(null)
     setOnlyResolved(null)
     setOnlyFavorites(null)
+    setSelectedTagId(null)
   }
 
-  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || onlyResolved !== null || onlyFavorites !== null || searchInput
+  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || onlyResolved !== null || onlyFavorites !== null || searchInput || selectedTagId
 
   // Toggle favorite
   const handleToggleFavorite = async (channelId: number) => {
@@ -1114,6 +1238,30 @@ export function Channels() {
                 <Star className={`w-4 h-4 ${onlyFavorites === true ? 'fill-yellow-500' : ''}`} />
                 Favoritos
               </button>
+
+              {/* Tag filter */}
+              {availableTags.length > 0 && (
+                <select
+                  value={selectedTagId || ''}
+                  onChange={(e) => setSelectedTagId(e.target.value ? parseInt(e.target.value) : null)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg bg-white"
+                >
+                  <option value="">Todas las etiquetas</option>
+                  {availableTags.map(tag => (
+                    <option key={tag.id} value={tag.id}>{tag.name}</option>
+                  ))}
+                </select>
+              )}
+
+              {/* Manage tags button */}
+              <button
+                onClick={() => setShowTagsModal(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                title="Gestionar etiquetas"
+              >
+                <Tag className="w-4 h-4" />
+                Etiquetas
+              </button>
             </div>
 
             {hasActiveFilters && (
@@ -1405,6 +1553,16 @@ export function Channels() {
                               title="Favorito"
                             >
                               <Star className={`w-3 h-3 ${channel.is_favorite ? 'fill-yellow-400 text-yellow-400' : 'text-gray-300 hover:text-yellow-400'}`} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setEditingTagsForChannel(channel)
+                                fetchChannelTags(channel.id)
+                              }}
+                              className="p-1 text-gray-400 hover:text-purple-600 hover:bg-purple-50 rounded"
+                              title="Gestionar etiquetas"
+                            >
+                              <Tag className="w-3 h-3" />
                             </button>
                             <button
                               onClick={() => setEditingChannel(channel)}
@@ -1834,6 +1992,166 @@ export function Channels() {
                   Cerrar
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Manage Tags */}
+      {showTagsModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Tag className="w-5 h-5 text-blue-600" />
+                Gestionar Etiquetas
+              </h3>
+              <button onClick={() => setShowTagsModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Create new tag */}
+            <div className="flex gap-2 mb-4">
+              <input
+                type="text"
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                placeholder="Nombre de etiqueta..."
+                className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                onKeyDown={(e) => e.key === 'Enter' && createTag()}
+              />
+              <input
+                type="color"
+                value={newTagColor}
+                onChange={(e) => setNewTagColor(e.target.value)}
+                className="w-10 h-10 rounded-lg border cursor-pointer"
+                title="Color de etiqueta"
+              />
+              <button
+                onClick={createTag}
+                disabled={!newTagName.trim()}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Tags list */}
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {availableTags.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">No hay etiquetas creadas</p>
+              ) : (
+                availableTags.map(tag => (
+                  <div
+                    key={tag.id}
+                    className="flex items-center justify-between p-2 border rounded-lg hover:bg-gray-50"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="w-4 h-4 rounded-full"
+                        style={{ backgroundColor: tag.color }}
+                      />
+                      <span className="font-medium">{tag.name}</span>
+                    </div>
+                    <button
+                      onClick={() => deleteTag(tag.id)}
+                      className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                      title="Eliminar etiqueta"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => setShowTagsModal(false)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Assign Tags to Channel */}
+      {editingTagsForChannel && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Tag className="w-5 h-5 text-blue-600" />
+                Etiquetas del canal
+              </h3>
+              <button onClick={() => setEditingTagsForChannel(null)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-4">
+              Canal: <strong>{editingTagsForChannel.name}</strong>
+            </p>
+
+            {/* Current tags */}
+            <div className="mb-4">
+              <p className="text-sm text-gray-500 mb-2">Etiquetas asignadas:</p>
+              <div className="flex flex-wrap gap-2">
+                {(channelTags[editingTagsForChannel.id] || []).length === 0 ? (
+                  <span className="text-gray-400 text-sm">Sin etiquetas</span>
+                ) : (
+                  (channelTags[editingTagsForChannel.id] || []).map(tag => (
+                    <span
+                      key={tag.id}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-sm text-white"
+                      style={{ backgroundColor: tag.color }}
+                    >
+                      {tag.name}
+                      <button
+                        onClick={() => removeTagFromChannel(editingTagsForChannel.id, tag.id)}
+                        className="hover:bg-black/20 rounded-full p-0.5"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))
+                )}
+              </div>
+            </div>
+
+            {/* Available tags to add */}
+            <div>
+              <p className="text-sm text-gray-500 mb-2">Añadir etiqueta:</p>
+              <div className="flex flex-wrap gap-2">
+                {availableTags
+                  .filter(tag => !(channelTags[editingTagsForChannel.id] || []).some(ct => ct.id === tag.id))
+                  .map(tag => (
+                    <button
+                      key={tag.id}
+                      onClick={() => assignTagToChannel(editingTagsForChannel.id, tag.id)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-sm border-2 hover:opacity-80"
+                      style={{ borderColor: tag.color, color: tag.color }}
+                    >
+                      <Plus className="w-3 h-3" />
+                      {tag.name}
+                    </button>
+                  ))}
+                {availableTags.filter(tag => !(channelTags[editingTagsForChannel.id] || []).some(ct => ct.id === tag.id)).length === 0 && (
+                  <span className="text-gray-400 text-sm">Todas las etiquetas ya asignadas</span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => setEditingTagsForChannel(null)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Cerrar
+              </button>
             </div>
           </div>
         </div>
