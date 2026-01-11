@@ -3,13 +3,14 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link, Star, Users, Tag
+  Edit2, Trash2, Plus, Link, Star, Users, Tag, Folder
 } from 'lucide-react'
 
 interface ChannelTheme {
   id: number
   name: string
   color: string | null
+  description: string | null
   sort_order: number
 }
 
@@ -226,6 +227,13 @@ export function Channels() {
   const [newTagName, setNewTagName] = useState('')
   const [newTagColor, setNewTagColor] = useState('#6B7280')
 
+  // Themes management state
+  const [showThemesModal, setShowThemesModal] = useState(false)
+  const [editingTheme, setEditingTheme] = useState<ChannelTheme | null>(null)
+  const [newThemeName, setNewThemeName] = useState('')
+  const [newThemeColor, setNewThemeColor] = useState('#6366f1')
+  const [newThemeDescription, setNewThemeDescription] = useState('')
+
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   // Fetch channels
@@ -369,6 +377,101 @@ export function Channels() {
     } catch (error) {
       console.error('Error removing tag:', error)
     }
+  }
+
+  // ============== Theme Management ==============
+
+  // Create a new theme
+  const createTheme = async () => {
+    if (!newThemeName.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/themes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newThemeName.trim(),
+          color: newThemeColor,
+          description: newThemeDescription.trim() || null
+        })
+      })
+      if (response.ok) {
+        setNewThemeName('')
+        setNewThemeColor('#6366f1')
+        setNewThemeDescription('')
+        fetchChannels()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al crear el tema')
+      }
+    } catch (error) {
+      console.error('Error creating theme:', error)
+    }
+  }
+
+  // Update a theme
+  const updateTheme = async () => {
+    if (!editingTheme || !newThemeName.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/themes/${editingTheme.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newThemeName.trim(),
+          color: newThemeColor,
+          description: newThemeDescription.trim() || null
+        })
+      })
+      if (response.ok) {
+        setEditingTheme(null)
+        setNewThemeName('')
+        setNewThemeColor('#6366f1')
+        setNewThemeDescription('')
+        fetchChannels()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al actualizar el tema')
+      }
+    } catch (error) {
+      console.error('Error updating theme:', error)
+    }
+  }
+
+  // Delete a theme
+  const deleteTheme = async (themeId: number, themeName: string) => {
+    const channelsInTheme = stats?.by_theme[themeName] || 0
+    const confirmMsg = channelsInTheme > 0
+      ? `¿Eliminar el tema "${themeName}"? ${channelsInTheme} canales quedarán sin tema.`
+      : `¿Eliminar el tema "${themeName}"?`
+
+    if (!confirm(confirmMsg)) return
+
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/themes/${themeId}`, { method: 'DELETE' })
+      if (response.ok) {
+        fetchChannels()
+        fetchStats()
+      }
+    } catch (error) {
+      console.error('Error deleting theme:', error)
+    }
+  }
+
+  // Start editing a theme
+  const startEditingTheme = (theme: ChannelTheme) => {
+    setEditingTheme(theme)
+    setNewThemeName(theme.name)
+    setNewThemeColor(theme.color || '#6366f1')
+    setNewThemeDescription(theme.description || '')
+  }
+
+  // Cancel editing
+  const cancelEditingTheme = () => {
+    setEditingTheme(null)
+    setNewThemeName('')
+    setNewThemeColor('#6366f1')
+    setNewThemeDescription('')
   }
 
   useEffect(() => {
@@ -549,16 +652,24 @@ export function Channels() {
     }
   }
 
-  // Update channel theme
-  const handleUpdateTheme = async (channelId: number, newThemeId: number | null) => {
+  // Update channel
+  const handleUpdateChannel = async (channelId: number, updates: {
+    name?: string
+    theme_id?: number | null
+    level?: string
+    energy?: string
+    use_type?: string
+    language?: string
+  }) => {
     try {
       await fetch(`${apiUrl}/api/channels/${channelId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ theme_id: newThemeId })
+        body: JSON.stringify(updates)
       })
       setEditingChannel(null)
       fetchChannels()
+      fetchStats()
     } catch (error) {
       console.error('Error updating channel:', error)
     }
@@ -1347,6 +1458,16 @@ export function Channels() {
                 <Tag className="w-4 h-4" />
                 Etiquetas
               </button>
+
+              {/* Manage themes button */}
+              <button
+                onClick={() => setShowThemesModal(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                title="Gestionar temas"
+              >
+                <Folder className="w-4 h-4" />
+                Temas
+              </button>
             </div>
 
             {hasActiveFilters && (
@@ -1750,43 +1871,132 @@ export function Channels() {
         </div>
       )}
 
-      {/* Modal: Edit Channel Theme */}
+      {/* Modal: Edit Channel */}
       {editingChannel && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Edit2 className="w-5 h-5 text-blue-600" />
-                Cambiar temática
+                Editar canal
               </h3>
               <button onClick={() => setEditingChannel(null)} className="text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <p className="text-sm text-gray-600 mb-2">
-              Canal: <strong>{editingChannel.name}</strong>
-            </p>
-            <p className="text-sm text-gray-500 mb-4">
-              Temática actual: {editingChannel.theme_name || 'Sin tema'}
-            </p>
-            <select
-              defaultValue={editingChannel.theme_id || ''}
-              onChange={(e) => handleUpdateTheme(editingChannel.id, e.target.value ? Number(e.target.value) : null)}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 mb-4"
-            >
-              <option value="">Sin tema</option>
-              {themes.map(theme => (
-                <option key={theme.id} value={theme.id}>{theme.name}</option>
-              ))}
-            </select>
-            <div className="flex justify-end">
-              <button
-                onClick={() => setEditingChannel(null)}
-                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-              >
-                Cerrar
-              </button>
-            </div>
+
+            <form onSubmit={(e) => {
+              e.preventDefault()
+              const formData = new FormData(e.currentTarget)
+              handleUpdateChannel(editingChannel.id, {
+                name: formData.get('name') as string,
+                theme_id: formData.get('theme_id') ? Number(formData.get('theme_id')) : null,
+                level: formData.get('level') as string,
+                energy: formData.get('energy') as string,
+                use_type: formData.get('use_type') as string,
+                language: formData.get('language') as string,
+              })
+            }} className="space-y-4">
+              {/* Nombre */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+                <input
+                  type="text"
+                  name="name"
+                  defaultValue={editingChannel.name}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  required
+                />
+              </div>
+
+              {/* Temática */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Temática</label>
+                <select
+                  name="theme_id"
+                  defaultValue={editingChannel.theme_id || ''}
+                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Sin tema</option>
+                  {themes.map(theme => (
+                    <option key={theme.id} value={theme.id}>{theme.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Row: Nivel y Energía */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Nivel</label>
+                  <select
+                    name="level"
+                    defaultValue={editingChannel.level}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    {Object.entries(LEVEL_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Energía</label>
+                  <select
+                    name="energy"
+                    defaultValue={editingChannel.energy}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    {Object.entries(ENERGY_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Row: Tipo de uso e Idioma */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de uso</label>
+                  <select
+                    name="use_type"
+                    defaultValue={editingChannel.use_type}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    {Object.entries(USE_TYPE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Idioma</label>
+                  <select
+                    name="language"
+                    defaultValue={editingChannel.language}
+                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+                  >
+                    {Object.entries(LANGUAGE_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{LANGUAGE_FLAGS[value]} {label}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Botones */}
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingChannel(null)}
+                  className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Guardar cambios
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -2154,6 +2364,134 @@ export function Channels() {
             <div className="flex justify-end mt-4">
               <button
                 onClick={() => setShowTagsModal(false)}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Manage Themes */}
+      {showThemesModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Folder className="w-5 h-5 text-indigo-600" />
+                Gestionar Temas
+              </h3>
+              <button onClick={() => { setShowThemesModal(false); cancelEditingTheme() }} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Create/Edit theme form */}
+            <div className="space-y-2 mb-4">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={newThemeName}
+                  onChange={(e) => setNewThemeName(e.target.value)}
+                  placeholder="Nombre del tema..."
+                  className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+                  onKeyDown={(e) => e.key === 'Enter' && (editingTheme ? updateTheme() : createTheme())}
+                />
+                <input
+                  type="color"
+                  value={newThemeColor}
+                  onChange={(e) => setNewThemeColor(e.target.value)}
+                  className="w-10 h-10 rounded-lg border cursor-pointer"
+                  title="Color del tema"
+                />
+              </div>
+              <input
+                type="text"
+                value={newThemeDescription}
+                onChange={(e) => setNewThemeDescription(e.target.value)}
+                placeholder="Descripción (opcional)..."
+                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500"
+              />
+              <div className="flex gap-2">
+                {editingTheme ? (
+                  <>
+                    <button
+                      onClick={updateTheme}
+                      disabled={!newThemeName.trim()}
+                      className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      Guardar cambios
+                    </button>
+                    <button
+                      onClick={cancelEditingTheme}
+                      className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={createTheme}
+                    disabled={!newThemeName.trim()}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Crear tema
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Themes list */}
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {themes.length === 0 ? (
+                <p className="text-gray-500 text-center py-4">No hay temas creados</p>
+              ) : (
+                themes.map(theme => (
+                  <div
+                    key={theme.id}
+                    className={`flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50 ${editingTheme?.id === theme.id ? 'ring-2 ring-indigo-500' : ''}`}
+                  >
+                    <div className="flex items-center gap-3 flex-1">
+                      <span
+                        className="w-4 h-4 rounded-full flex-shrink-0"
+                        style={{ backgroundColor: theme.color || '#6B7280' }}
+                      />
+                      <div className="min-w-0">
+                        <span className="font-medium block">{theme.name}</span>
+                        {theme.description && (
+                          <span className="text-xs text-gray-500 truncate block">{theme.description}</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-400 ml-auto mr-2">
+                        {stats?.by_theme[theme.name] || 0} canales
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => startEditingTheme(theme)}
+                        className="p-1 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded"
+                        title="Editar tema"
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteTheme(theme.id, theme.name)}
+                        className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                        title="Eliminar tema"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => { setShowThemesModal(false); cancelEditingTheme() }}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
               >
                 Cerrar

@@ -34,6 +34,20 @@ class ChannelTheme(BaseModel):
     sort_order: int = 0
 
 
+class ThemeCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    color: Optional[str] = "#6B7280"
+    sort_order: int = 0
+
+
+class ThemeUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
 class CuratedChannel(BaseModel):
     id: int
     name: str
@@ -252,6 +266,87 @@ async def get_themes():
     supabase = get_supabase()
     response = supabase.table("channel_themes").select("*").order("sort_order").execute()
     return response.data or []
+
+
+@router.post("/themes", response_model=ChannelTheme)
+async def create_theme(theme: ThemeCreate):
+    """Create a new channel theme."""
+    supabase = get_supabase()
+
+    # Check if theme name already exists
+    existing = supabase.table("channel_themes").select("id").eq("name", theme.name).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"El tema '{theme.name}' ya existe")
+
+    # Get max sort_order if not specified
+    if theme.sort_order == 0:
+        max_order = supabase.table("channel_themes").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+        theme.sort_order = (max_order.data[0]["sort_order"] + 1) if max_order.data else 1
+
+    response = supabase.table("channel_themes").insert({
+        "name": theme.name,
+        "description": theme.description,
+        "color": theme.color,
+        "sort_order": theme.sort_order
+    }).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Error al crear el tema")
+
+    return response.data[0]
+
+
+@router.put("/themes/{theme_id}", response_model=ChannelTheme)
+async def update_theme(theme_id: int, theme: ThemeUpdate):
+    """Update a channel theme."""
+    supabase = get_supabase()
+
+    data = theme.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+    # Check if new name already exists (if name is being updated)
+    if "name" in data:
+        existing = supabase.table("channel_themes").select("id").eq("name", data["name"]).neq("id", theme_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail=f"El tema '{data['name']}' ya existe")
+
+    response = supabase.table("channel_themes").update(data).eq("id", theme_id).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Tema no encontrado")
+
+    return response.data[0]
+
+
+@router.delete("/themes/{theme_id}")
+async def delete_theme(theme_id: int):
+    """Delete a channel theme. Channels with this theme will have theme_id set to null."""
+    supabase = get_supabase()
+
+    # Check if theme exists
+    existing = supabase.table("channel_themes").select("id, name").eq("id", theme_id).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Tema no encontrado")
+
+    theme_name = existing.data[0]["name"]
+
+    # Count channels using this theme
+    channels_count = supabase.table("curated_channels").select("id", count="exact").eq("theme_id", theme_id).execute()
+    count = channels_count.count or 0
+
+    # Set theme_id to null for all channels using this theme
+    if count > 0:
+        supabase.table("curated_channels").update({"theme_id": None}).eq("theme_id", theme_id).execute()
+
+    # Delete the theme
+    supabase.table("channel_themes").delete().eq("id", theme_id).execute()
+
+    return {
+        "success": True,
+        "deleted_theme": theme_name,
+        "channels_affected": count
+    }
 
 
 @router.get("", response_model=ChannelsResponse)
