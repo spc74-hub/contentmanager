@@ -46,6 +46,7 @@ class CuratedChannel(BaseModel):
     level: str = "medio"
     energy: str = "media"
     use_type: str = "inspiracion"
+    language: str = "es"
     is_active: bool = True
     is_resolved: bool = False
     is_favorite: bool = False
@@ -63,6 +64,7 @@ class ChannelCreate(BaseModel):
     level: str = "medio"
     energy: str = "media"
     use_type: str = "inspiracion"
+    language: str = "es"
 
 
 class ChannelUpdate(BaseModel):
@@ -74,6 +76,7 @@ class ChannelUpdate(BaseModel):
     level: Optional[str] = None
     energy: Optional[str] = None
     use_type: Optional[str] = None
+    language: Optional[str] = None
     is_active: Optional[bool] = None
     is_resolved: Optional[bool] = None
     is_favorite: Optional[bool] = None
@@ -122,6 +125,8 @@ class ChannelStats(BaseModel):
     by_level: dict
     by_energy: dict
     by_use_type: dict
+    by_language: dict
+    by_subscriber_range: dict
 
 
 # ============== Helper ==============
@@ -255,6 +260,8 @@ async def get_channels(
     level: Optional[str] = None,
     energy: Optional[str] = None,
     use_type: Optional[str] = None,
+    language: Optional[str] = None,
+    subscriber_range: Optional[str] = None,  # "0", "1-10K", "10K-100K", "100K-500K", "500K-1M", "1M-5M", "5M+"
     is_resolved: Optional[bool] = None,
     is_favorite: Optional[bool] = None,
     search: Optional[str] = None,
@@ -263,6 +270,17 @@ async def get_channels(
 ):
     """Get curated channels with optional filters."""
     supabase = get_supabase()
+
+    # Subscriber range mapping
+    subscriber_ranges = {
+        "0": (None, 0),           # No subscribers / unknown
+        "1-10K": (1, 10000),
+        "10K-100K": (10000, 100000),
+        "100K-500K": (100000, 500000),
+        "500K-1M": (500000, 1000000),
+        "1M-5M": (1000000, 5000000),
+        "5M+": (5000000, None),
+    }
 
     # Build query
     query = supabase.table("curated_channels").select(
@@ -278,6 +296,17 @@ async def get_channels(
         query = query.eq("energy", energy)
     if use_type:
         query = query.eq("use_type", use_type)
+    if language:
+        query = query.eq("language", language)
+    if subscriber_range and subscriber_range in subscriber_ranges:
+        min_subs, max_subs = subscriber_ranges[subscriber_range]
+        if subscriber_range == "0":
+            query = query.or_("subscriber_count.is.null,subscriber_count.eq.0")
+        else:
+            if min_subs is not None:
+                query = query.gte("subscriber_count", min_subs)
+            if max_subs is not None:
+                query = query.lt("subscriber_count", max_subs)
     if is_resolved is not None:
         query = query.eq("is_resolved", is_resolved)
     if is_favorite is not None:
@@ -285,7 +314,7 @@ async def get_channels(
     if search:
         query = query.ilike("name", f"%{search}%")
 
-    # Get total count
+    # Get total count (apply same filters)
     count_response = supabase.table("curated_channels").select("id", count="exact")
     if theme_id:
         count_response = count_response.eq("theme_id", theme_id)
@@ -295,6 +324,17 @@ async def get_channels(
         count_response = count_response.eq("energy", energy)
     if use_type:
         count_response = count_response.eq("use_type", use_type)
+    if language:
+        count_response = count_response.eq("language", language)
+    if subscriber_range and subscriber_range in subscriber_ranges:
+        min_subs, max_subs = subscriber_ranges[subscriber_range]
+        if subscriber_range == "0":
+            count_response = count_response.or_("subscriber_count.is.null,subscriber_count.eq.0")
+        else:
+            if min_subs is not None:
+                count_response = count_response.gte("subscriber_count", min_subs)
+            if max_subs is not None:
+                count_response = count_response.lt("subscriber_count", max_subs)
     if is_resolved is not None:
         count_response = count_response.eq("is_resolved", is_resolved)
     if is_favorite is not None:
@@ -332,7 +372,7 @@ async def get_channel_stats():
 
     # Get all channels
     response = supabase.table("curated_channels").select(
-        "id, theme_id, level, energy, use_type, is_resolved"
+        "id, theme_id, level, energy, use_type, language, subscriber_count, is_resolved"
     ).execute()
     channels = response.data or []
 
@@ -345,7 +385,33 @@ async def get_channel_stats():
     by_level = {"intro": 0, "medio": 0, "avanzado": 0}
     by_energy = {"baja": 0, "media": 0, "alta": 0}
     by_use_type = {"estudio": 0, "inspiracion": 0, "ocio": 0, "espiritual": 0}
+    by_language = {"es": 0, "en": 0, "other": 0}
+    by_subscriber_range = {
+        "0": 0,
+        "1-10K": 0,
+        "10K-100K": 0,
+        "100K-500K": 0,
+        "500K-1M": 0,
+        "1M-5M": 0,
+        "5M+": 0
+    }
     resolved_count = 0
+
+    def get_subscriber_range(subs):
+        if subs is None or subs == 0:
+            return "0"
+        elif subs < 10000:
+            return "1-10K"
+        elif subs < 100000:
+            return "10K-100K"
+        elif subs < 500000:
+            return "100K-500K"
+        elif subs < 1000000:
+            return "500K-1M"
+        elif subs < 5000000:
+            return "1M-5M"
+        else:
+            return "5M+"
 
     for ch in channels:
         # Theme
@@ -367,6 +433,18 @@ async def get_channel_stats():
         if use_type in by_use_type:
             by_use_type[use_type] += 1
 
+        # Language
+        lang = ch.get("language", "es")
+        if lang in by_language:
+            by_language[lang] += 1
+        else:
+            by_language["other"] += 1
+
+        # Subscriber range
+        subs = ch.get("subscriber_count")
+        sub_range = get_subscriber_range(subs)
+        by_subscriber_range[sub_range] += 1
+
         # Resolved
         if ch.get("is_resolved"):
             resolved_count += 1
@@ -377,7 +455,9 @@ async def get_channel_stats():
         by_theme=by_theme,
         by_level=by_level,
         by_energy=by_energy,
-        by_use_type=by_use_type
+        by_use_type=by_use_type,
+        by_language=by_language,
+        by_subscriber_range=by_subscriber_range
     )
 
 

@@ -25,6 +25,7 @@ interface CuratedChannel {
   level: string
   energy: string
   use_type: string
+  language: string
   is_active: boolean
   is_resolved: boolean
   is_favorite: boolean
@@ -47,6 +48,8 @@ interface ChannelStats {
   by_level: Record<string, number>
   by_energy: Record<string, number>
   by_use_type: Record<string, number>
+  by_language: Record<string, number>
+  by_subscriber_range: Record<string, number>
 }
 
 interface ChannelTagType {
@@ -94,6 +97,28 @@ const ENERGY_COLORS: Record<string, string> = {
   baja: 'bg-blue-100 text-blue-700',
   media: 'bg-orange-100 text-orange-700',
   alta: 'bg-red-100 text-red-700'
+}
+
+const LANGUAGE_LABELS: Record<string, string> = {
+  es: 'Español',
+  en: 'English',
+  other: 'Otro'
+}
+
+const LANGUAGE_FLAGS: Record<string, string> = {
+  es: '🇪🇸',
+  en: '🇬🇧',
+  other: '🌐'
+}
+
+const SUBSCRIBER_RANGE_LABELS: Record<string, string> = {
+  '0': 'Sin datos',
+  '1-10K': '1 - 10K',
+  '10K-100K': '10K - 100K',
+  '100K-500K': '100K - 500K',
+  '500K-1M': '500K - 1M',
+  '1M-5M': '1M - 5M',
+  '5M+': '+5M'
 }
 
 // Format subscriber count (e.g., 1.2M, 500K, 1.5K)
@@ -187,6 +212,8 @@ export function Channels() {
   const [selectedLevel, setSelectedLevel] = useState<string | null>(null)
   const [selectedEnergy, setSelectedEnergy] = useState<string | null>(null)
   const [selectedUseType, setSelectedUseType] = useState<string | null>(null)
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null)
+  const [selectedSubscriberRange, setSelectedSubscriberRange] = useState<string | null>(null)
   const [onlyResolved, setOnlyResolved] = useState<boolean | null>(null)
   const [onlyFavorites, setOnlyFavorites] = useState<boolean | null>(null)
   const [selectedTagId, setSelectedTagId] = useState<number | null>(null)
@@ -240,6 +267,8 @@ export function Channels() {
         if (selectedLevel) params.append('level', selectedLevel)
         if (selectedEnergy) params.append('energy', selectedEnergy)
         if (selectedUseType) params.append('use_type', selectedUseType)
+        if (selectedLanguage) params.append('language', selectedLanguage)
+        if (selectedSubscriberRange) params.append('subscriber_range', selectedSubscriberRange)
         if (onlyResolved !== null) params.append('is_resolved', onlyResolved.toString())
         if (onlyFavorites !== null) params.append('is_favorite', onlyFavorites.toString())
         if (searchInput) params.append('search', searchInput)
@@ -346,7 +375,7 @@ export function Channels() {
     fetchChannels()
     fetchStats()
     fetchTags()
-  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, onlyResolved, onlyFavorites, selectedTagId])
+  }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, selectedLanguage, selectedSubscriberRange, onlyResolved, onlyFavorites, selectedTagId])
 
   // Debounced search
   useEffect(() => {
@@ -494,12 +523,14 @@ export function Channels() {
     setSelectedLevel(null)
     setSelectedEnergy(null)
     setSelectedUseType(null)
+    setSelectedLanguage(null)
+    setSelectedSubscriberRange(null)
     setOnlyResolved(null)
     setOnlyFavorites(null)
     setSelectedTagId(null)
   }
 
-  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || onlyResolved !== null || onlyFavorites !== null || searchInput || selectedTagId
+  const hasActiveFilters = selectedTheme || selectedLevel || selectedEnergy || selectedUseType || selectedLanguage || selectedSubscriberRange || onlyResolved !== null || onlyFavorites !== null || searchInput || selectedTagId
 
   // Toggle favorite
   const handleToggleFavorite = async (channelId: number) => {
@@ -1113,7 +1144,7 @@ export function Channels() {
               </div>
 
               {/* By Use Type */}
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 mb-2">
                 <span className="text-xs text-gray-500 w-16">Uso:</span>
                 {Object.entries(stats.by_use_type).map(([useType, count]) => {
                   const Icon = USE_TYPE_ICONS[useType] || BookOpen
@@ -1127,6 +1158,32 @@ export function Channels() {
                     </span>
                   )
                 })}
+              </div>
+
+              {/* By Language */}
+              <div className="flex flex-wrap gap-2 mb-2">
+                <span className="text-xs text-gray-500 w-16">Idioma:</span>
+                {Object.entries(stats.by_language || {}).map(([lang, count]) => (
+                  <span
+                    key={lang}
+                    className="text-xs px-2 py-1 rounded bg-indigo-100 text-indigo-700"
+                  >
+                    {LANGUAGE_FLAGS[lang]} {LANGUAGE_LABELS[lang]}: {count}
+                  </span>
+                ))}
+              </div>
+
+              {/* By Subscriber Range */}
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs text-gray-500 w-16">Subs:</span>
+                {Object.entries(stats.by_subscriber_range || {}).map(([range, count]) => (
+                  <span
+                    key={range}
+                    className="text-xs px-2 py-1 rounded bg-emerald-100 text-emerald-700"
+                  >
+                    {SUBSCRIBER_RANGE_LABELS[range]}: {count}
+                  </span>
+                ))}
               </div>
             </div>
           )}
@@ -1213,6 +1270,34 @@ export function Channels() {
                 <option value="inspiracion">Inspiración</option>
                 <option value="ocio">Ocio</option>
                 <option value="espiritual">Espiritual</option>
+              </select>
+
+              {/* Language filter */}
+              <select
+                value={selectedLanguage || ''}
+                onChange={(e) => setSelectedLanguage(e.target.value || null)}
+                className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Todos los idiomas</option>
+                <option value="es">🇪🇸 Español</option>
+                <option value="en">🇬🇧 English</option>
+                <option value="other">🌐 Otro</option>
+              </select>
+
+              {/* Subscriber Range filter */}
+              <select
+                value={selectedSubscriberRange || ''}
+                onChange={(e) => setSelectedSubscriberRange(e.target.value || null)}
+                className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Todos los suscriptores</option>
+                <option value="0">Sin datos</option>
+                <option value="1-10K">1 - 10K</option>
+                <option value="10K-100K">10K - 100K</option>
+                <option value="100K-500K">100K - 500K</option>
+                <option value="500K-1M">500K - 1M</option>
+                <option value="1M-5M">1M - 5M</option>
+                <option value="5M+">+5M</option>
               </select>
 
               {/* Resolved filter */}
