@@ -3,7 +3,7 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link, Star, Users, Tag, Settings
+  Edit2, Trash2, Plus, Link, Star, Users, Tag
 } from 'lucide-react'
 
 interface ChannelTheme {
