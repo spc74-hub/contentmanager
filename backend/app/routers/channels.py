@@ -122,6 +122,69 @@ class TagUpdate(BaseModel):
     color: Optional[str] = None
 
 
+# ============== Channel Attribute Models ==============
+
+class ChannelLevel(BaseModel):
+    id: int
+    name: str
+    label: str
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelLevelCreate(BaseModel):
+    name: str
+    label: str
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelLevelUpdate(BaseModel):
+    name: Optional[str] = None
+    label: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+
+class ChannelEnergy(BaseModel):
+    id: int
+    name: str
+    label: str
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelEnergyCreate(BaseModel):
+    name: str
+    label: str
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelEnergyUpdate(BaseModel):
+    name: Optional[str] = None
+    label: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+
+class ChannelUseType(BaseModel):
+    id: int
+    name: str
+    label: str
+    icon: str = "BookOpen"
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelUseTypeCreate(BaseModel):
+    name: str
+    label: str
+    icon: str = "BookOpen"
+    color: str = "bg-gray-100 text-gray-700"
+    sort_order: int = 0
+
+class ChannelUseTypeUpdate(BaseModel):
+    name: Optional[str] = None
+    label: Optional[str] = None
+    icon: Optional[str] = None
+    color: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
 class ImportExcelRequest(BaseModel):
     file_path: str  # Path to Excel file
 
@@ -347,6 +410,232 @@ async def delete_theme(theme_id: int):
         "deleted_theme": theme_name,
         "channels_affected": count
     }
+
+
+# ============== Channel Levels CRUD ==============
+
+@router.get("/levels", response_model=List[ChannelLevel])
+async def get_levels():
+    """Get all channel levels."""
+    supabase = get_supabase()
+    response = supabase.table("channel_levels").select("*").order("sort_order").execute()
+    return response.data or []
+
+
+@router.post("/levels", response_model=ChannelLevel)
+async def create_level(level: ChannelLevelCreate):
+    """Create a new channel level."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_levels").select("id").eq("name", level.name).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"El nivel '{level.name}' ya existe")
+
+    if level.sort_order == 0:
+        max_order = supabase.table("channel_levels").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+        level.sort_order = (max_order.data[0]["sort_order"] + 1) if max_order.data else 1
+
+    response = supabase.table("channel_levels").insert({
+        "name": level.name,
+        "label": level.label,
+        "color": level.color,
+        "sort_order": level.sort_order
+    }).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Error al crear el nivel")
+    return response.data[0]
+
+
+@router.put("/levels/{level_id}", response_model=ChannelLevel)
+async def update_level(level_id: int, level: ChannelLevelUpdate):
+    """Update a channel level."""
+    supabase = get_supabase()
+
+    data = level.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+    if "name" in data:
+        existing = supabase.table("channel_levels").select("id").eq("name", data["name"]).neq("id", level_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail=f"El nivel '{data['name']}' ya existe")
+
+    response = supabase.table("channel_levels").update(data).eq("id", level_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Nivel no encontrado")
+    return response.data[0]
+
+
+@router.delete("/levels/{level_id}")
+async def delete_level(level_id: int):
+    """Delete a channel level."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_levels").select("id, name").eq("id", level_id).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Nivel no encontrado")
+
+    level_name = existing.data[0]["name"]
+    channels_count = supabase.table("curated_channels").select("id", count="exact").eq("level", level_name).execute()
+    count = channels_count.count or 0
+
+    if count > 0:
+        supabase.table("curated_channels").update({"level": "medio"}).eq("level", level_name).execute()
+
+    supabase.table("channel_levels").delete().eq("id", level_id).execute()
+    return {"success": True, "deleted_level": level_name, "channels_affected": count}
+
+
+# ============== Channel Energies CRUD ==============
+
+@router.get("/energies", response_model=List[ChannelEnergy])
+async def get_energies():
+    """Get all channel energies."""
+    supabase = get_supabase()
+    response = supabase.table("channel_energies").select("*").order("sort_order").execute()
+    return response.data or []
+
+
+@router.post("/energies", response_model=ChannelEnergy)
+async def create_energy(energy: ChannelEnergyCreate):
+    """Create a new channel energy."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_energies").select("id").eq("name", energy.name).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"La energía '{energy.name}' ya existe")
+
+    if energy.sort_order == 0:
+        max_order = supabase.table("channel_energies").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+        energy.sort_order = (max_order.data[0]["sort_order"] + 1) if max_order.data else 1
+
+    response = supabase.table("channel_energies").insert({
+        "name": energy.name,
+        "label": energy.label,
+        "color": energy.color,
+        "sort_order": energy.sort_order
+    }).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Error al crear la energía")
+    return response.data[0]
+
+
+@router.put("/energies/{energy_id}", response_model=ChannelEnergy)
+async def update_energy(energy_id: int, energy: ChannelEnergyUpdate):
+    """Update a channel energy."""
+    supabase = get_supabase()
+
+    data = energy.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+    if "name" in data:
+        existing = supabase.table("channel_energies").select("id").eq("name", data["name"]).neq("id", energy_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail=f"La energía '{data['name']}' ya existe")
+
+    response = supabase.table("channel_energies").update(data).eq("id", energy_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Energía no encontrada")
+    return response.data[0]
+
+
+@router.delete("/energies/{energy_id}")
+async def delete_energy(energy_id: int):
+    """Delete a channel energy."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_energies").select("id, name").eq("id", energy_id).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Energía no encontrada")
+
+    energy_name = existing.data[0]["name"]
+    channels_count = supabase.table("curated_channels").select("id", count="exact").eq("energy", energy_name).execute()
+    count = channels_count.count or 0
+
+    if count > 0:
+        supabase.table("curated_channels").update({"energy": "media"}).eq("energy", energy_name).execute()
+
+    supabase.table("channel_energies").delete().eq("id", energy_id).execute()
+    return {"success": True, "deleted_energy": energy_name, "channels_affected": count}
+
+
+# ============== Channel Use Types CRUD ==============
+
+@router.get("/use-types", response_model=List[ChannelUseType])
+async def get_use_types():
+    """Get all channel use types."""
+    supabase = get_supabase()
+    response = supabase.table("channel_use_types").select("*").order("sort_order").execute()
+    return response.data or []
+
+
+@router.post("/use-types", response_model=ChannelUseType)
+async def create_use_type(use_type: ChannelUseTypeCreate):
+    """Create a new channel use type."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_use_types").select("id").eq("name", use_type.name).execute()
+    if existing.data:
+        raise HTTPException(status_code=400, detail=f"El tipo de uso '{use_type.name}' ya existe")
+
+    if use_type.sort_order == 0:
+        max_order = supabase.table("channel_use_types").select("sort_order").order("sort_order", desc=True).limit(1).execute()
+        use_type.sort_order = (max_order.data[0]["sort_order"] + 1) if max_order.data else 1
+
+    response = supabase.table("channel_use_types").insert({
+        "name": use_type.name,
+        "label": use_type.label,
+        "icon": use_type.icon,
+        "color": use_type.color,
+        "sort_order": use_type.sort_order
+    }).execute()
+
+    if not response.data:
+        raise HTTPException(status_code=400, detail="Error al crear el tipo de uso")
+    return response.data[0]
+
+
+@router.put("/use-types/{use_type_id}", response_model=ChannelUseType)
+async def update_use_type(use_type_id: int, use_type: ChannelUseTypeUpdate):
+    """Update a channel use type."""
+    supabase = get_supabase()
+
+    data = use_type.model_dump(exclude_none=True)
+    if not data:
+        raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+    if "name" in data:
+        existing = supabase.table("channel_use_types").select("id").eq("name", data["name"]).neq("id", use_type_id).execute()
+        if existing.data:
+            raise HTTPException(status_code=400, detail=f"El tipo de uso '{data['name']}' ya existe")
+
+    response = supabase.table("channel_use_types").update(data).eq("id", use_type_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Tipo de uso no encontrado")
+    return response.data[0]
+
+
+@router.delete("/use-types/{use_type_id}")
+async def delete_use_type(use_type_id: int):
+    """Delete a channel use type."""
+    supabase = get_supabase()
+
+    existing = supabase.table("channel_use_types").select("id, name").eq("id", use_type_id).execute()
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="Tipo de uso no encontrado")
+
+    use_type_name = existing.data[0]["name"]
+    channels_count = supabase.table("curated_channels").select("id", count="exact").eq("use_type", use_type_name).execute()
+    count = channels_count.count or 0
+
+    if count > 0:
+        supabase.table("curated_channels").update({"use_type": "inspiracion"}).eq("use_type", use_type_name).execute()
+
+    supabase.table("channel_use_types").delete().eq("id", use_type_id).execute()
+    return {"success": True, "deleted_use_type": use_type_name, "channels_affected": count}
 
 
 @router.get("", response_model=ChannelsResponse)

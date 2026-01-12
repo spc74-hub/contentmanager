@@ -3,7 +3,7 @@ import {
   Search, Filter, Youtube, ExternalLink,
   Grid, List, ChevronDown, ChevronUp, Check, X,
   Zap, BookOpen, Coffee, Heart, Loader2, FileSpreadsheet, Download, Video,
-  Edit2, Trash2, Plus, Link, Star, Users, Tag, Folder
+  Edit2, Trash2, Plus, Link, Star, Users, Tag, Folder, Settings
 } from 'lucide-react'
 
 interface ChannelTheme {
@@ -60,44 +60,39 @@ interface ChannelTagType {
   created_at?: string
 }
 
+interface ChannelLevelType {
+  id: number
+  name: string
+  label: string
+  color: string
+  sort_order: number
+}
+
+interface ChannelEnergyType {
+  id: number
+  name: string
+  label: string
+  color: string
+  sort_order: number
+}
+
+interface ChannelUseTypeType {
+  id: number
+  name: string
+  label: string
+  icon: string
+  color: string
+  sort_order: number
+}
+
 type ViewMode = 'grid' | 'list'
 
-const LEVEL_LABELS: Record<string, string> = {
-  intro: 'Intro',
-  medio: 'Medio',
-  avanzado: 'Avanzado'
-}
-
-const ENERGY_LABELS: Record<string, string> = {
-  baja: 'Baja',
-  media: 'Media',
-  alta: 'Alta'
-}
-
-const USE_TYPE_LABELS: Record<string, string> = {
-  estudio: 'Estudio',
-  inspiracion: 'Inspiración',
-  ocio: 'Ocio',
-  espiritual: 'Espiritual'
-}
-
-const USE_TYPE_ICONS: Record<string, typeof BookOpen> = {
-  estudio: BookOpen,
-  inspiracion: Zap,
-  ocio: Coffee,
-  espiritual: Heart
-}
-
-const LEVEL_COLORS: Record<string, string> = {
-  intro: 'bg-green-100 text-green-700',
-  medio: 'bg-yellow-100 text-yellow-700',
-  avanzado: 'bg-red-100 text-red-700'
-}
-
-const ENERGY_COLORS: Record<string, string> = {
-  baja: 'bg-blue-100 text-blue-700',
-  media: 'bg-orange-100 text-orange-700',
-  alta: 'bg-red-100 text-red-700'
+// Icon mapping for use types
+const USE_TYPE_ICON_MAP: Record<string, typeof BookOpen> = {
+  BookOpen: BookOpen,
+  Zap: Zap,
+  Coffee: Coffee,
+  Heart: Heart
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -133,6 +128,9 @@ const formatSubscribers = (count: number | null): string => {
 export function Channels() {
   const [channels, setChannels] = useState<CuratedChannel[]>([])
   const [themes, setThemes] = useState<ChannelTheme[]>([])
+  const [levels, setLevels] = useState<ChannelLevelType[]>([])
+  const [energies, setEnergies] = useState<ChannelEnergyType[]>([])
+  const [useTypes, setUseTypes] = useState<ChannelUseTypeType[]>([])
   const [stats, setStats] = useState<ChannelStats | null>(null)
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
@@ -234,6 +232,17 @@ export function Channels() {
   const [newThemeColor, setNewThemeColor] = useState('#6366f1')
   const [newThemeDescription, setNewThemeDescription] = useState('')
 
+  // Attributes management state (levels, energies, use_types)
+  const [showAttributesModal, setShowAttributesModal] = useState(false)
+  const [attributeTab, setAttributeTab] = useState<'levels' | 'energies' | 'useTypes'>('levels')
+  const [editingLevel, setEditingLevel] = useState<ChannelLevelType | null>(null)
+  const [editingEnergy, setEditingEnergy] = useState<ChannelEnergyType | null>(null)
+  const [editingUseType, setEditingUseType] = useState<ChannelUseTypeType | null>(null)
+  const [newAttrName, setNewAttrName] = useState('')
+  const [newAttrLabel, setNewAttrLabel] = useState('')
+  const [newAttrColor, setNewAttrColor] = useState('bg-gray-100 text-gray-700')
+  const [newAttrIcon, setNewAttrIcon] = useState('BookOpen')
+
   const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   // Fetch channels
@@ -315,6 +324,25 @@ export function Channels() {
       setAvailableTags(data)
     } catch (error) {
       console.error('Error fetching tags:', error)
+    }
+  }
+
+  // Fetch channel attributes (levels, energies, use_types)
+  const fetchAttributes = async () => {
+    try {
+      const [levelsRes, energiesRes, useTypesRes] = await Promise.all([
+        fetch(`${apiUrl}/api/channels/levels`),
+        fetch(`${apiUrl}/api/channels/energies`),
+        fetch(`${apiUrl}/api/channels/use-types`)
+      ])
+      const levelsData: ChannelLevelType[] = await levelsRes.json()
+      const energiesData: ChannelEnergyType[] = await energiesRes.json()
+      const useTypesData: ChannelUseTypeType[] = await useTypesRes.json()
+      setLevels(levelsData)
+      setEnergies(energiesData)
+      setUseTypes(useTypesData)
+    } catch (error) {
+      console.error('Error fetching attributes:', error)
     }
   }
 
@@ -474,10 +502,208 @@ export function Channels() {
     setNewThemeDescription('')
   }
 
+  // ============== Attributes Management (Levels, Energies, UseTypes) ==============
+
+  const resetAttributeForm = () => {
+    setNewAttrName('')
+    setNewAttrLabel('')
+    setNewAttrColor('bg-gray-100 text-gray-700')
+    setNewAttrIcon('BookOpen')
+    setEditingLevel(null)
+    setEditingEnergy(null)
+    setEditingUseType(null)
+  }
+
+  // Levels CRUD
+  const createLevel = async () => {
+    if (!newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/levels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al crear el nivel')
+      }
+    } catch (error) {
+      console.error('Error creating level:', error)
+    }
+  }
+
+  const updateLevel = async () => {
+    if (!editingLevel || !newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/levels/${editingLevel.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchChannels()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al actualizar el nivel')
+      }
+    } catch (error) {
+      console.error('Error updating level:', error)
+    }
+  }
+
+  const deleteLevel = async (levelId: number, levelName: string) => {
+    const count = stats?.by_level[levelName] || 0
+    const msg = count > 0 ? `¿Eliminar "${levelName}"? ${count} canales pasarán a "Medio".` : `¿Eliminar "${levelName}"?`
+    if (!confirm(msg)) return
+    try {
+      await fetch(`${apiUrl}/api/channels/levels/${levelId}`, { method: 'DELETE' })
+      fetchAttributes()
+      fetchChannels()
+      fetchStats()
+    } catch (error) {
+      console.error('Error deleting level:', error)
+    }
+  }
+
+  // Energies CRUD
+  const createEnergy = async () => {
+    if (!newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/energies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al crear la energía')
+      }
+    } catch (error) {
+      console.error('Error creating energy:', error)
+    }
+  }
+
+  const updateEnergy = async () => {
+    if (!editingEnergy || !newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/energies/${editingEnergy.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchChannels()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al actualizar la energía')
+      }
+    } catch (error) {
+      console.error('Error updating energy:', error)
+    }
+  }
+
+  const deleteEnergy = async (energyId: number, energyName: string) => {
+    const count = stats?.by_energy[energyName] || 0
+    const msg = count > 0 ? `¿Eliminar "${energyName}"? ${count} canales pasarán a "Media".` : `¿Eliminar "${energyName}"?`
+    if (!confirm(msg)) return
+    try {
+      await fetch(`${apiUrl}/api/channels/energies/${energyId}`, { method: 'DELETE' })
+      fetchAttributes()
+      fetchChannels()
+      fetchStats()
+    } catch (error) {
+      console.error('Error deleting energy:', error)
+    }
+  }
+
+  // Use Types CRUD
+  const createUseType = async () => {
+    if (!newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/use-types`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor, icon: newAttrIcon })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al crear el tipo de uso')
+      }
+    } catch (error) {
+      console.error('Error creating use type:', error)
+    }
+  }
+
+  const updateUseType = async () => {
+    if (!editingUseType || !newAttrName.trim() || !newAttrLabel.trim()) return
+    try {
+      const response = await fetch(`${apiUrl}/api/channels/use-types/${editingUseType.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newAttrName.trim(), label: newAttrLabel.trim(), color: newAttrColor, icon: newAttrIcon })
+      })
+      if (response.ok) {
+        resetAttributeForm()
+        fetchAttributes()
+        fetchChannels()
+        fetchStats()
+      } else {
+        const error = await response.json()
+        alert(error.detail || 'Error al actualizar el tipo de uso')
+      }
+    } catch (error) {
+      console.error('Error updating use type:', error)
+    }
+  }
+
+  const deleteUseType = async (useTypeId: number, useTypeName: string) => {
+    const count = stats?.by_use_type[useTypeName] || 0
+    const msg = count > 0 ? `¿Eliminar "${useTypeName}"? ${count} canales pasarán a "Inspiración".` : `¿Eliminar "${useTypeName}"?`
+    if (!confirm(msg)) return
+    try {
+      await fetch(`${apiUrl}/api/channels/use-types/${useTypeId}`, { method: 'DELETE' })
+      fetchAttributes()
+      fetchChannels()
+      fetchStats()
+    } catch (error) {
+      console.error('Error deleting use type:', error)
+    }
+  }
+
+  // Helper to get label/color from dynamic data
+  const getLevelLabel = (name: string) => levels.find(l => l.name === name)?.label || name
+  const getLevelColor = (name: string) => levels.find(l => l.name === name)?.color || 'bg-gray-100 text-gray-700'
+  const getEnergyLabel = (name: string) => energies.find(e => e.name === name)?.label || name
+  const getEnergyColor = (name: string) => energies.find(e => e.name === name)?.color || 'bg-gray-100 text-gray-700'
+  const getUseTypeLabel = (name: string) => useTypes.find(u => u.name === name)?.label || name
+  const getUseTypeIcon = (name: string) => {
+    const iconName = useTypes.find(u => u.name === name)?.icon || 'BookOpen'
+    return USE_TYPE_ICON_MAP[iconName] || BookOpen
+  }
+
   useEffect(() => {
     fetchChannels()
     fetchStats()
     fetchTags()
+    fetchAttributes()
   }, [selectedTheme, selectedLevel, selectedEnergy, selectedUseType, selectedLanguage, selectedSubscriberRange, onlyResolved, onlyFavorites, selectedTagId])
 
   // Debounced search
@@ -1353,9 +1579,9 @@ export function Channels() {
                 className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Todos los niveles</option>
-                <option value="intro">Intro</option>
-                <option value="medio">Medio</option>
-                <option value="avanzado">Avanzado</option>
+                {levels.map(level => (
+                  <option key={level.name} value={level.name}>{level.label}</option>
+                ))}
               </select>
 
               {/* Energy filter */}
@@ -1365,9 +1591,9 @@ export function Channels() {
                 className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Todas las energías</option>
-                <option value="baja">Baja</option>
-                <option value="media">Media</option>
-                <option value="alta">Alta</option>
+                {energies.map(energy => (
+                  <option key={energy.name} value={energy.name}>{energy.label}</option>
+                ))}
               </select>
 
               {/* Use Type filter */}
@@ -1377,10 +1603,9 @@ export function Channels() {
                 className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">Todos los usos</option>
-                <option value="estudio">Estudio</option>
-                <option value="inspiracion">Inspiración</option>
-                <option value="ocio">Ocio</option>
-                <option value="espiritual">Espiritual</option>
+                {useTypes.map(ut => (
+                  <option key={ut.name} value={ut.name}>{ut.label}</option>
+                ))}
               </select>
 
               {/* Language filter */}
@@ -1467,6 +1692,16 @@ export function Channels() {
               >
                 <Folder className="w-4 h-4" />
                 Temas
+              </button>
+
+              {/* Manage attributes button */}
+              <button
+                onClick={() => setShowAttributesModal(true)}
+                className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50"
+                title="Gestionar niveles, energías y tipos de uso"
+              >
+                <Settings className="w-4 h-4" />
+                Atributos
               </button>
             </div>
 
@@ -1933,8 +2168,8 @@ export function Channels() {
                     defaultValue={editingChannel.level}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
-                    {Object.entries(LEVEL_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
+                    {levels.map(level => (
+                      <option key={level.name} value={level.name}>{level.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1945,8 +2180,8 @@ export function Channels() {
                     defaultValue={editingChannel.energy}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
-                    {Object.entries(ENERGY_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
+                    {energies.map(energy => (
+                      <option key={energy.name} value={energy.name}>{energy.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1961,8 +2196,8 @@ export function Channels() {
                     defaultValue={editingChannel.use_type}
                     className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
                   >
-                    {Object.entries(USE_TYPE_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
+                    {useTypes.map(ut => (
+                      <option key={ut.name} value={ut.name}>{ut.label}</option>
                     ))}
                   </select>
                 </div>
@@ -2492,6 +2727,173 @@ export function Channels() {
             <div className="flex justify-end mt-4">
               <button
                 onClick={() => { setShowThemesModal(false); cancelEditingTheme() }}
+                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Manage Attributes (Levels, Energies, UseTypes) */}
+      {showAttributesModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold flex items-center gap-2">
+                <Settings className="w-5 h-5 text-gray-600" />
+                Gestionar Atributos
+              </h3>
+              <button onClick={() => { setShowAttributesModal(false); resetAttributeForm() }} className="text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex border-b mb-4">
+              <button
+                onClick={() => { setAttributeTab('levels'); resetAttributeForm() }}
+                className={`px-4 py-2 -mb-px ${attributeTab === 'levels' ? 'border-b-2 border-blue-600 text-blue-600 font-medium' : 'text-gray-500'}`}
+              >
+                Niveles
+              </button>
+              <button
+                onClick={() => { setAttributeTab('energies'); resetAttributeForm() }}
+                className={`px-4 py-2 -mb-px ${attributeTab === 'energies' ? 'border-b-2 border-blue-600 text-blue-600 font-medium' : 'text-gray-500'}`}
+              >
+                Energías
+              </button>
+              <button
+                onClick={() => { setAttributeTab('useTypes'); resetAttributeForm() }}
+                className={`px-4 py-2 -mb-px ${attributeTab === 'useTypes' ? 'border-b-2 border-blue-600 text-blue-600 font-medium' : 'text-gray-500'}`}
+              >
+                Tipos de Uso
+              </button>
+            </div>
+
+            {/* Form */}
+            <div className="space-y-3 mb-4">
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  value={newAttrName}
+                  onChange={(e) => setNewAttrName(e.target.value.toLowerCase().replace(/\s+/g, '_'))}
+                  placeholder="Identificador (ej: basico)"
+                  className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+                <input
+                  type="text"
+                  value={newAttrLabel}
+                  onChange={(e) => setNewAttrLabel(e.target.value)}
+                  placeholder="Etiqueta (ej: Básico)"
+                  className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                />
+              </div>
+              <div className="flex gap-2">
+                <select
+                  value={newAttrColor}
+                  onChange={(e) => setNewAttrColor(e.target.value)}
+                  className="flex-1 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                >
+                  <option value="bg-gray-100 text-gray-700">Gris</option>
+                  <option value="bg-green-100 text-green-700">Verde</option>
+                  <option value="bg-blue-100 text-blue-700">Azul</option>
+                  <option value="bg-yellow-100 text-yellow-700">Amarillo</option>
+                  <option value="bg-orange-100 text-orange-700">Naranja</option>
+                  <option value="bg-red-100 text-red-700">Rojo</option>
+                  <option value="bg-purple-100 text-purple-700">Púrpura</option>
+                  <option value="bg-pink-100 text-pink-700">Rosa</option>
+                  <option value="bg-indigo-100 text-indigo-700">Índigo</option>
+                </select>
+                {attributeTab === 'useTypes' && (
+                  <select
+                    value={newAttrIcon}
+                    onChange={(e) => setNewAttrIcon(e.target.value)}
+                    className="px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
+                  >
+                    <option value="BookOpen">Libro</option>
+                    <option value="Zap">Rayo</option>
+                    <option value="Coffee">Café</option>
+                    <option value="Heart">Corazón</option>
+                  </select>
+                )}
+                {(attributeTab === 'levels' ? editingLevel : attributeTab === 'energies' ? editingEnergy : editingUseType) ? (
+                  <>
+                    <button
+                      onClick={() => attributeTab === 'levels' ? updateLevel() : attributeTab === 'energies' ? updateEnergy() : updateUseType()}
+                      disabled={!newAttrName.trim() || !newAttrLabel.trim()}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm"
+                    >
+                      Guardar
+                    </button>
+                    <button
+                      onClick={resetAttributeForm}
+                      className="px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm"
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => attributeTab === 'levels' ? createLevel() : attributeTab === 'energies' ? createEnergy() : createUseType()}
+                    disabled={!newAttrName.trim() || !newAttrLabel.trim()}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 text-sm flex items-center gap-1"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Crear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* List */}
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {attributeTab === 'levels' && levels.map(level => (
+                <div key={level.id} className={`flex items-center justify-between p-2 border rounded-lg hover:bg-gray-50 ${editingLevel?.id === level.id ? 'ring-2 ring-blue-500' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded text-xs ${level.color}`}>{level.label}</span>
+                    <span className="text-xs text-gray-400">({level.name})</span>
+                    <span className="text-xs text-gray-400 ml-2">{stats?.by_level[level.name] || 0} canales</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditingLevel(level); setNewAttrName(level.name); setNewAttrLabel(level.label); setNewAttrColor(level.color) }} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
+                    <button onClick={() => deleteLevel(level.id, level.name)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              ))}
+              {attributeTab === 'energies' && energies.map(energy => (
+                <div key={energy.id} className={`flex items-center justify-between p-2 border rounded-lg hover:bg-gray-50 ${editingEnergy?.id === energy.id ? 'ring-2 ring-blue-500' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-0.5 rounded text-xs ${energy.color}`}>{energy.label}</span>
+                    <span className="text-xs text-gray-400">({energy.name})</span>
+                    <span className="text-xs text-gray-400 ml-2">{stats?.by_energy[energy.name] || 0} canales</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditingEnergy(energy); setNewAttrName(energy.name); setNewAttrLabel(energy.label); setNewAttrColor(energy.color) }} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
+                    <button onClick={() => deleteEnergy(energy.id, energy.name)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              ))}
+              {attributeTab === 'useTypes' && useTypes.map(ut => (
+                <div key={ut.id} className={`flex items-center justify-between p-2 border rounded-lg hover:bg-gray-50 ${editingUseType?.id === ut.id ? 'ring-2 ring-blue-500' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    {USE_TYPE_ICON_MAP[ut.icon] && (() => { const Icon = USE_TYPE_ICON_MAP[ut.icon]; return <Icon className="w-4 h-4 text-gray-500" /> })()}
+                    <span className={`px-2 py-0.5 rounded text-xs ${ut.color}`}>{ut.label}</span>
+                    <span className="text-xs text-gray-400">({ut.name})</span>
+                    <span className="text-xs text-gray-400 ml-2">{stats?.by_use_type[ut.name] || 0} canales</span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => { setEditingUseType(ut); setNewAttrName(ut.name); setNewAttrLabel(ut.label); setNewAttrColor(ut.color); setNewAttrIcon(ut.icon) }} className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
+                    <button onClick={() => deleteUseType(ut.id, ut.name)} className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={() => { setShowAttributesModal(false); resetAttributeForm() }}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
               >
                 Cerrar
