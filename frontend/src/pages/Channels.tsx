@@ -1460,9 +1460,9 @@ export function Channels() {
                 {Object.entries(stats.by_level).map(([level, count]) => (
                   <span
                     key={level}
-                    className={`text-xs px-2 py-1 rounded ${LEVEL_COLORS[level]}`}
+                    className={`text-xs px-2 py-1 rounded ${getLevelColor(level)}`}
                   >
-                    {LEVEL_LABELS[level]}: {count}
+                    {getLevelLabel(level)}: {count}
                   </span>
                 ))}
               </div>
@@ -1473,9 +1473,9 @@ export function Channels() {
                 {Object.entries(stats.by_energy).map(([energy, count]) => (
                   <span
                     key={energy}
-                    className={`text-xs px-2 py-1 rounded ${ENERGY_COLORS[energy]}`}
+                    className={`text-xs px-2 py-1 rounded ${getEnergyColor(energy)}`}
                   >
-                    {ENERGY_LABELS[energy]}: {count}
+                    {getEnergyLabel(energy)}: {count}
                   </span>
                 ))}
               </div>
@@ -1484,14 +1484,14 @@ export function Channels() {
               <div className="flex flex-wrap gap-2 mb-2">
                 <span className="text-xs text-gray-500 w-16">Uso:</span>
                 {Object.entries(stats.by_use_type).map(([useType, count]) => {
-                  const Icon = USE_TYPE_ICONS[useType] || BookOpen
+                  const Icon = getUseTypeIcon(useType)
                   return (
                     <span
                       key={useType}
                       className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 flex items-center gap-1"
                     >
                       <Icon className="w-3 h-3" />
-                      {USE_TYPE_LABELS[useType]}: {count}
+                      {getUseTypeLabel(useType)}: {count}
                     </span>
                   )
                 })}
@@ -1754,7 +1754,7 @@ export function Channels() {
             </thead>
             <tbody className="divide-y">
               {channels.map(channel => {
-                const UseIcon = USE_TYPE_ICONS[channel.use_type] || BookOpen
+                const UseIcon = getUseTypeIcon(channel.use_type)
                 return (
                   <tr key={channel.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
@@ -1776,19 +1776,19 @@ export function Channels() {
                       {channel.subscriber_count ? formatSubscribers(channel.subscriber_count) : '-'}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs px-2 py-1 rounded ${LEVEL_COLORS[channel.level]}`}>
-                        {LEVEL_LABELS[channel.level]}
+                      <span className={`text-xs px-2 py-1 rounded ${getLevelColor(channel.level)}`}>
+                        {getLevelLabel(channel.level)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs px-2 py-1 rounded ${ENERGY_COLORS[channel.energy]}`}>
-                        {ENERGY_LABELS[channel.energy]}
+                      <span className={`text-xs px-2 py-1 rounded ${getEnergyColor(channel.energy)}`}>
+                        {getEnergyLabel(channel.energy)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
                       <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700 inline-flex items-center gap-1">
                         <UseIcon className="w-3 h-3" />
-                        {USE_TYPE_LABELS[channel.use_type]}
+                        {getUseTypeLabel(channel.use_type)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -1919,7 +1919,7 @@ export function Channels() {
                 {!isCollapsed && (
                 <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-visible">
                   {themeChannels.map(channel => {
-                    const UseIcon = USE_TYPE_ICONS[channel.use_type] || BookOpen
+                    const UseIcon = getUseTypeIcon(channel.use_type)
                     const isSelected = selectedChannelIds.has(channel.id)
                     return (
                       <div
@@ -1967,15 +1967,15 @@ export function Channels() {
                           </div>
                         </div>
                         <div className="flex flex-wrap gap-1 mb-2">
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${LEVEL_COLORS[channel.level]}`}>
-                            {LEVEL_LABELS[channel.level]}
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${getLevelColor(channel.level)}`}>
+                            {getLevelLabel(channel.level)}
                           </span>
-                          <span className={`text-xs px-1.5 py-0.5 rounded ${ENERGY_COLORS[channel.energy]}`}>
-                            {ENERGY_LABELS[channel.energy]}
+                          <span className={`text-xs px-1.5 py-0.5 rounded ${getEnergyColor(channel.energy)}`}>
+                            {getEnergyLabel(channel.energy)}
                           </span>
                           <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 flex items-center gap-0.5">
                             <UseIcon className="w-2.5 h-2.5" />
-                            {USE_TYPE_LABELS[channel.use_type]}
+                            {getUseTypeLabel(channel.use_type)}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
