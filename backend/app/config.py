@@ -3,11 +3,12 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    supabase_url: str
-    supabase_key: str
-    youtube_client_id: str
-    youtube_client_secret: str
+    database_url: str = "postgresql+asyncpg://spcadmin:PASSWORD@spcapps-postgres:5432/content_manager"
+    youtube_client_id: str = ""
+    youtube_client_secret: str = ""
     frontend_url: str = "http://localhost:5173"
+    secret_key: str = "change-me-in-production"
+    ollama_url: str = "http://localhost:11434"
 
     class Config:
         env_file = ".env"

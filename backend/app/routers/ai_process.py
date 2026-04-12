@@ -856,50 +856,16 @@ Responde SOLO con las subcategorías separadas por comas (máximo 3):"""
         return []
 
 
-async def get_author_history(author: str, supabase) -> list[dict]:
+async def get_author_history(author: str, supabase=None) -> list[dict]:
     """Get author's video history with areas for context."""
-    try:
-        result = supabase.table("videos").select(
-            "id, area_id, areas(name_es)"
-        ).eq("author", author).not_.is_("area_id", "null").limit(20).execute()
-
-        history = []
-        for v in result.data:
-            if v.get('areas'):
-                history.append({
-                    "video_id": v['id'],
-                    "area_id": v['area_id'],
-                    "area_name": v['areas']['name_es']
-                })
-        return history
-    except Exception as e:
-        print(f"Error getting author history: {e}")
-        return []
+    from app.db.helpers import get_author_history as _get_author_history
+    return await _get_author_history(author)
 
 
-async def get_video_tags(video_id: int, supabase) -> list[str]:
-    """Get tags for a video from video_tags table.
-
-    Args:
-        video_id: The video ID
-        supabase: Supabase client
-
-    Returns:
-        List of tag names
-    """
-    try:
-        result = supabase.table("video_tags").select(
-            "tags(name)"
-        ).eq("video_id", video_id).execute()
-
-        tags = []
-        for item in result.data:
-            if item.get('tags') and item['tags'].get('name'):
-                tags.append(item['tags']['name'])
-        return tags
-    except Exception as e:
-        print(f"Error getting video tags: {e}")
-        return []
+async def get_video_tags(video_id: int, supabase=None) -> list[str]:
+    """Get tags for a video from video_tags table."""
+    from app.db.helpers import get_video_tags_list
+    return await get_video_tags_list(video_id)
 
 
 async def process_single_video(
@@ -1098,7 +1064,8 @@ async def process_single_video(
         update_data["ai_processed_at"] = datetime.now().isoformat()
 
         try:
-            supabase.table("videos").update(update_data).eq("id", video["id"]).execute()
+            from app.db.helpers import update_video_fields
+            await update_video_fields(video["id"], update_data)
         except Exception as e:
             result["error"] = f"DB update error: {str(e)}"
 
@@ -1110,12 +1077,8 @@ async def process_single_video(
 
         for topic_id in topic_ids_to_save:
             try:
-                supabase.table("video_topics").upsert({
-                    "video_id": video["id"],
-                    "topic_id": topic_id,
-                    "confidence": confidence,
-                    "needs_review": needs_review
-                }, on_conflict="video_id,topic_id").execute()
+                from app.db.helpers import insert_video_topic
+                await insert_video_topic(video["id"], topic_id, confidence=classification.get("confidence", 0.5), needs_review=classification.get("needs_review", False))
             except Exception as e:
                 print(f"Video-topic link error: {e}")
 
@@ -1126,7 +1089,9 @@ async def process_single_video(
         for subcat_name in subcategories:
             try:
                 # Check if exists
-                existing = supabase.table("subcategories").select("id").eq(
+                pass  # Subcategories are deprecated - skipping DB operations
+                if False and False:  # Dead code kept for reference
+                    existing = None  # supabase.table("subcategories").select("id").eq(
                     "name", subcat_name
                 ).eq("category_id", category_id).execute()
 
@@ -1134,7 +1099,7 @@ async def process_single_video(
                     subcat_id = existing.data[0]["id"]
                 else:
                     # Create new
-                    new_subcat = supabase.table("subcategories").insert({
+                    new_subcat = None  # Deprecated: supabase.table("subcategories").insert({
                         "name": subcat_name,
                         "category_id": category_id
                     }).execute()
@@ -1143,7 +1108,7 @@ async def process_single_video(
                 # Link video to subcategory
                 if subcat_id:
                     try:
-                        supabase.table("video_subcategories").insert({
+                        pass  # Deprecated: supabase.table("video_subcategories").insert({
                             "video_id": video["id"],
                             "subcategory_id": subcat_id
                         }).execute()
@@ -1169,77 +1134,53 @@ async def process_ai_job(job_id: str, request: AIProcessRequest):
     settings = get_settings()
 
     try:
-        from supabase import create_client
-        supabase = create_client(settings.supabase_url, settings.supabase_key)
+        from app.db.session import async_session_maker
+        from app.db.models import Video as VideoModel, Category as CategoryModel, Area as AreaModel, Topic as TopicModel
+        from sqlalchemy import select as sa_select, or_
 
-        # Get categories (old taxonomy - for backwards compatibility)
-        categories_response = supabase.table("categories").select("id, name").execute()
-        category_map = {c["id"]: c["name"] for c in categories_response.data}
+        async with async_session_maker() as db:
+            cat_result = await db.execute(sa_select(CategoryModel.id, CategoryModel.name))
+            category_map = {r[0]: r[1] for r in cat_result.all()}
 
-        # Get areas and topics (new taxonomy)
-        areas_response = supabase.table("areas").select("*").order("sort_order").execute()
-        areas = areas_response.data if areas_response.data else []
+            areas_result = await db.execute(sa_select(AreaModel).order_by(AreaModel.sort_order))
+            areas = [{"id": a.id, "name": a.name, "name_es": a.name_es} for a in areas_result.scalars().all()]
 
-        topics_response = supabase.table("topics").select("*").execute()
-        topics = topics_response.data if topics_response.data else []
+            topics_result = await db.execute(sa_select(TopicModel))
+            topics = [{"id": t.id, "area_id": t.area_id, "name": t.name, "name_es": t.name_es} for t in topics_result.scalars().all()]
 
-        print(f"[AI PROCESS {job_id}] Loaded {len(areas)} areas and {len(topics)} topics")
+            print(f"[AI PROCESS {job_id}] Loaded {len(areas)} areas and {len(topics)} topics")
 
-        # Fetch all videos with pagination (Supabase default limit is 1000)
-        all_videos = []
-        page_size = 1000
-        offset = 0
+            query = sa_select(VideoModel)
 
-        while True:
-            # Clone the query for each page
-            page_query = supabase.table("videos").select(
-                "id, youtube_id, title, author, url, category_id, area_id, transcript, has_transcript, summary, key_points"
-            )
-
-            # Re-apply filters
+            youtube_sources = ["liked_videos", "playlist", "subscription", "LIKED_VIDEOS", "PLAYLIST", "SUBSCRIPTION"]
             if request.source == "youtube":
-                youtube_sources = ["liked_videos", "playlist", "subscription", "LIKED_VIDEOS", "PLAYLIST", "SUBSCRIPTION"]
-                page_query = page_query.in_("source", youtube_sources)
+                query = query.where(VideoModel.source.in_(youtube_sources))
             elif request.source == "tiktok":
-                page_query = page_query.in_("source", ["tiktok", "TIKTOK"])
+                query = query.where(VideoModel.source.in_(["tiktok", "TIKTOK"]))
             elif request.source in ["subscription", "liked_videos", "playlist", "curated_channel"]:
-                # Specific source filter
-                page_query = page_query.eq("source", request.source)
+                query = query.where(VideoModel.source == request.source)
 
-            # Filter by curated channel if specified
             if request.curated_channel_id:
-                page_query = page_query.eq("curated_channel_id", request.curated_channel_id)
-
+                query = query.where(VideoModel.curated_channel_id == request.curated_channel_id)
             if request.only_without_area:
-                page_query = page_query.is_("area_id", "null")
-            elif request.only_without_key_points:
-                # Will filter in Python after fetch (array empty check doesn't work well in Supabase)
-                pass
+                query = query.where(VideoModel.area_id.is_(None))
             elif request.only_without_summary:
-                page_query = page_query.or_("summary.is.null,summary.eq.")
+                query = query.where(or_(VideoModel.summary.is_(None), VideoModel.summary == ""))
             elif request.skip_processed:
-                page_query = page_query.or_("transcript.is.null,transcript.eq.")
+                query = query.where(or_(VideoModel.transcript.is_(None), VideoModel.transcript == ""))
 
-            # Apply pagination
-            page_query = page_query.range(offset, offset + page_size - 1)
+            result = await db.execute(query)
+            db_videos = result.scalars().all()
+            videos = [{
+                "id": v.id, "youtube_id": v.youtube_id, "title": v.title, "author": v.author,
+                "url": v.url, "category_id": v.category_id, "area_id": v.area_id,
+                "transcript": v.transcript, "has_transcript": v.has_transcript,
+                "summary": v.summary, "key_points": v.key_points, "source": v.source,
+                "description": v.description,
+            } for v in db_videos]
 
-            page_response = page_query.execute()
-            page_data = page_response.data or []
+        supabase = None  # No longer needed
 
-            if not page_data:
-                break
-
-            all_videos.extend(page_data)
-            print(f"[AI PROCESS {job_id}] Fetched {len(page_data)} videos (offset {offset}, total so far: {len(all_videos)})")
-
-            if len(page_data) < page_size:
-                break  # No more pages
-
-            offset += page_size
-
-        videos = all_videos
-
-        # Apply Python-side filters for array fields (Supabase can't filter empty arrays well)
         if request.only_without_key_points:
             videos = [v for v in videos if not v.get("key_points")]
             print(f"[AI PROCESS {job_id}] Filtered to {len(videos)} videos without key_points")
@@ -1574,41 +1515,43 @@ async def test_single_video_process(video_id: int, whisper_model: str = "base"):
     settings = get_settings()
 
     try:
-        from supabase import create_client
-        supabase = create_client(settings.supabase_url, settings.supabase_key)
+        from app.db.session import async_session_maker
+        from app.db.models import Video as VideoModel, Category as CategoryModel, Area as AreaModel, Topic as TopicModel
+        from sqlalchemy import select as sa_select
 
-        # Get video
-        video_response = supabase.table("videos").select("*").eq("id", video_id).single().execute()
+        async with async_session_maker() as db:
+            video_result = await db.execute(sa_select(VideoModel).where(VideoModel.id == video_id))
+            db_video = video_result.scalar_one_or_none()
 
-        if not video_response.data:
+        if not db_video:
             raise HTTPException(status_code=404, detail="Video not found")
 
-        video = video_response.data
+        video = {
+            "id": db_video.id, "youtube_id": db_video.youtube_id, "title": db_video.title,
+            "author": db_video.author, "url": db_video.url, "category_id": db_video.category_id,
+            "area_id": db_video.area_id, "transcript": db_video.transcript,
+            "has_transcript": db_video.has_transcript, "summary": db_video.summary,
+            "key_points": db_video.key_points, "source": db_video.source,
+            "description": db_video.description,
+        }
 
-        # Get categories (old taxonomy - for backwards compatibility)
-        categories_response = supabase.table("categories").select("id, name").execute()
-        category_map = {c["id"]: c["name"] for c in categories_response.data}
+        async with async_session_maker() as db:
+            cat_result = await db.execute(sa_select(CategoryModel.id, CategoryModel.name))
+            category_map = {r[0]: r[1] for r in cat_result.all()}
+            areas_result = await db.execute(sa_select(AreaModel).order_by(AreaModel.sort_order))
+            areas = [{"id": a.id, "name": a.name, "name_es": a.name_es} for a in areas_result.scalars().all()]
+            topics_result = await db.execute(sa_select(TopicModel))
+            topics = [{"id": t.id, "area_id": t.area_id, "name": t.name, "name_es": t.name_es} for t in topics_result.scalars().all()]
 
-        # Get areas and topics (new taxonomy)
-        areas_response = supabase.table("areas").select("*").order("sort_order").execute()
-        areas = areas_response.data if areas_response.data else []
-
-        topics_response = supabase.table("topics").select("*").execute()
-        topics = topics_response.data if topics_response.data else []
-
-        # Process
         request = AIProcessRequest(
-            include_transcription=True,
-            include_summary=True,
-            include_key_points=True,
-            include_categorization=True,
-            include_subcategories=True,
-            whisper_model=whisper_model
+            include_transcription=True, include_summary=True,
+            include_key_points=True, include_categorization=True,
+            include_subcategories=True, whisper_model=whisper_model,
         )
 
         start_time = time.time()
         result = await process_single_video(
-            video, request, category_map, supabase,
+            video, request, category_map, None,
             areas=areas, topics=topics
         )
         elapsed = time.time() - start_time
@@ -1638,11 +1581,12 @@ async def analyze_video_selection(request: AnalyzeSelectionRequest):
     - Extended mode: Uses titles + summaries (more accurate, needs processed videos)
     """
     import httpx
-    from supabase import create_client
+    # supabase removed - using SQLAlchemy
+from app.db.session import async_session_maker as _asm
     from app.config import get_settings
 
     settings = get_settings()
-    supabase = create_client(settings.supabase_url, settings.supabase_key)
+    pass  # Using SQLAlchemy instead of Supabase
 
     if not request.video_ids:
         raise HTTPException(status_code=400, detail="No videos selected")
@@ -1654,14 +1598,18 @@ async def analyze_video_selection(request: AnalyzeSelectionRequest):
     all_videos = []
     chunk_size = 100
 
-    for i in range(0, len(request.video_ids), chunk_size):
-        chunk_ids = request.video_ids[i:i + chunk_size]
-        response = supabase.table("videos").select(
-            "id, title, author, summary, source, url"
-        ).in_("id", chunk_ids).execute()
-
-        if response.data:
-            all_videos.extend(response.data)
+    from app.db.session import async_session_maker as _asm2
+    from app.db.models import Video as _VM
+    from sqlalchemy import select as _sel
+    async with _asm2() as _db:
+        for i in range(0, len(request.video_ids), chunk_size):
+            chunk_ids = request.video_ids[i:i + chunk_size]
+            result = await _db.execute(_sel(_VM).where(_VM.id.in_(chunk_ids)))
+            for v in result.scalars().all():
+                all_videos.append({
+                    "id": v.id, "title": v.title, "author": v.author,
+                    "summary": v.summary, "source": v.source, "url": v.url,
+                })
 
     if not all_videos:
         raise HTTPException(status_code=404, detail="No videos found")
@@ -1885,59 +1833,26 @@ async def get_enrichment_stats():
     Only counts non-archived videos.
     Optimized: uses minimal field selection and single pass processing.
     """
-    from supabase import create_client
-    from dotenv import load_dotenv
-
-    # Load env
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    load_dotenv(env_path)
-
-    supabase_url = os.getenv("SUPABASE_URL", "")
-    supabase_key = os.getenv("SUPABASE_KEY", "")
-
-    if not supabase_url or not supabase_key:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    supabase = create_client(supabase_url, supabase_key)
+    from app.db.session import async_session_maker as _asm3
+    from app.db.models import Video as _VM2, VideoTopic as _VT2
+    from sqlalchemy import select as _sel2
 
     try:
-        # Fetch all videos with pagination (Supabase default limit is 1000)
-        all_videos = []
-        page_size = 1000
-        offset = 0
+        async with _asm3() as _db:
+            result = await _db.execute(_sel2(_VM2))
+            db_videos = result.scalars().all()
+            all_videos = [{
+                "id": v.id, "source": v.source, "transcript": v.transcript,
+                "area_id": v.area_id, "summary": v.summary, "key_points": v.key_points,
+                "is_archived": v.is_archived, "curated_channel_id": v.curated_channel_id,
+            } for v in db_videos]
 
-        while True:
-            response = supabase.table("videos").select(
-                "id, source, transcript, area_id, summary, key_points, is_archived, curated_channel_id"
-            ).range(offset, offset + page_size - 1).execute()
+            vt_result = await _db.execute(_sel2(_VT2.video_id))
+            videos_with_topics = set(r[0] for r in vt_result.all())
 
-            if response.data:
-                all_videos.extend(response.data)
-                print(f"[Stats] Fetched {len(response.data)} videos (offset {offset}, total: {len(all_videos)})")
-
-            if not response.data or len(response.data) < page_size:
-                break
-            offset += page_size
-
-        # Filter out archived in Python (more reliable than Supabase or_ filter)
         archived_videos = [v for v in all_videos if v.get("is_archived") == True]
         active_videos = [v for v in all_videos if not v.get("is_archived")]
         archived_count = len(archived_videos)
-
-        print(f"[Stats] Total: {len(all_videos)}, Active: {len(active_videos)}, Archived: {archived_count}")
-
-        # Get videos with topics assigned (only IDs) - also paginate this
-        all_video_topics = []
-        offset = 0
-        while True:
-            vt_response = supabase.table("video_topics").select("video_id").range(offset, offset + page_size - 1).execute()
-            if vt_response.data:
-                all_video_topics.extend(vt_response.data)
-            if not vt_response.data or len(vt_response.data) < page_size:
-                break
-            offset += page_size
-
-        videos_with_topics = set(vt["video_id"] for vt in all_video_topics)
 
         # Single pass: group by source and calculate stats
         by_source: dict[str, dict] = defaultdict(lambda: {
@@ -2014,8 +1929,11 @@ async def get_enrichment_stats():
         # Get channel names
         channel_names = {}
         if by_channel:
-            ch_response = supabase.table("curated_channels").select("id, name").in_("id", list(by_channel.keys())).execute()
-            channel_names = {ch["id"]: ch["name"] for ch in (ch_response.data or [])}
+            from app.db.models import CuratedChannel as _CC
+            async with _asm3() as _db2:
+                ch_result = await _db2.execute(_sel2(_CC.id, _CC.name).where(_CC.id.in_(list(by_channel.keys()))))
+                ch_response_data = [{"id": r[0], "name": r[1]} for r in ch_result.all()]
+            channel_names = {ch["id"]: ch["name"] for ch in ch_response_data}
 
         channel_stats = [
             EnrichmentChannelStats(

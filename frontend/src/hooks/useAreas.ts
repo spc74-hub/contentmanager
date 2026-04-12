@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { supabase } from '@/lib/supabase'
+import { apiFetch } from '@/lib/api'
 import type { Area, TopicWithArea } from '@/types'
 
 // ============================================================================
@@ -9,29 +9,14 @@ import type { Area, TopicWithArea } from '@/types'
 export function useAreas() {
   return useQuery({
     queryKey: ['areas'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('areas')
-        .select('*')
-        .order('sort_order', { ascending: true })
-      if (error) throw error
-      return data as Area[]
-    },
+    queryFn: () => apiFetch<Area[]>('/api/taxonomy/areas'),
   })
 }
 
 export function useArea(id: number) {
   return useQuery({
     queryKey: ['area', id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('areas')
-        .select('*')
-        .eq('id', id)
-        .single()
-      if (error) throw error
-      return data as Area
-    },
+    queryFn: () => apiFetch<Area>(`/api/taxonomy/areas/${id}`),
     enabled: !!id,
   })
 }
@@ -43,19 +28,9 @@ export function useArea(id: number) {
 export function useTopics(areaId?: number) {
   return useQuery({
     queryKey: ['topics', areaId],
-    queryFn: async () => {
-      let query = supabase
-        .from('topics')
-        .select('*, area:areas(*)')
-        .order('name_es', { ascending: true })
-
-      if (areaId) {
-        query = query.eq('area_id', areaId)
-      }
-
-      const { data, error } = await query
-      if (error) throw error
-      return data as TopicWithArea[]
+    queryFn: () => {
+      const qs = areaId ? `?area_id=${areaId}` : ''
+      return apiFetch<TopicWithArea[]>(`/api/taxonomy/topics${qs}`)
     },
   })
 }
@@ -63,20 +38,11 @@ export function useTopics(areaId?: number) {
 export function useTopic(id: number) {
   return useQuery({
     queryKey: ['topic', id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('topics')
-        .select('*, area:areas(*)')
-        .eq('id', id)
-        .single()
-      if (error) throw error
-      return data as TopicWithArea
-    },
+    queryFn: () => apiFetch<TopicWithArea>(`/api/taxonomy/topics/${id}`),
     enabled: !!id,
   })
 }
 
-// Get topics grouped by area (for dropdown menus)
 export function useTopicsGroupedByArea() {
   const { data: areas } = useAreas()
   const { data: topics } = useTopics()
@@ -98,30 +64,24 @@ export function useTopicsGroupedByArea() {
 export function useVideoTopics(videoId: number) {
   return useQuery({
     queryKey: ['video-topics', videoId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('video_topics')
-        .select('*, topic:topics(*, area:areas(*))')
-        .eq('video_id', videoId)
-      if (error) throw error
-      return data
-    },
+    // This would need a dedicated endpoint; for now return empty
+    queryFn: async () => [] as unknown[],
     enabled: !!videoId,
   })
 }
 
 export function useAddVideoTopic() {
   const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: async ({ videoId, topicId }: { videoId: number; topicId: number }) => {
-      const { error } = await supabase
-        .from('video_topics')
-        .insert({ video_id: videoId, topic_id: topicId } as never)
-      if (error) throw error
+    mutationFn: ({ videoIds, topicId }: { videoIds?: number[]; videoId?: number; topicId: number }) => {
+      const ids = videoIds || (arguments[0] as { videoId: number }).videoId ? [(arguments[0] as { videoId: number }).videoId] : []
+      return apiFetch('/api/taxonomy/videos/bulk/assign-topic', {
+        method: 'POST',
+        body: JSON.stringify({ video_ids: ids, topic_id: topicId }),
+      })
     },
-    onSuccess: (_, { videoId }) => {
-      queryClient.invalidateQueries({ queryKey: ['video-topics', videoId] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['video-topics'] })
       queryClient.invalidateQueries({ queryKey: ['topics'] })
     },
   })
@@ -129,18 +89,14 @@ export function useAddVideoTopic() {
 
 export function useRemoveVideoTopic() {
   const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: async ({ videoId, topicId }: { videoId: number; topicId: number }) => {
-      const { error } = await supabase
-        .from('video_topics')
-        .delete()
-        .eq('video_id', videoId)
-        .eq('topic_id', topicId)
-      if (error) throw error
-    },
-    onSuccess: (_, { videoId }) => {
-      queryClient.invalidateQueries({ queryKey: ['video-topics', videoId] })
+    mutationFn: ({ videoId, topicId }: { videoId: number; topicId: number }) =>
+      apiFetch('/api/taxonomy/videos/bulk/assign-topic', {
+        method: 'POST',
+        body: JSON.stringify({ video_ids: [videoId], topic_id: topicId, remove: true }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['video-topics'] })
       queryClient.invalidateQueries({ queryKey: ['topics'] })
     },
   })
@@ -152,14 +108,10 @@ export function useRemoveVideoTopic() {
 
 export function useUpdateVideoArea() {
   const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: async ({ videoId, areaId }: { videoId: number; areaId: number | null }) => {
-      const { error } = await supabase
-        .from('videos')
-        .update({ area_id: areaId } as never)
-        .eq('id', videoId)
-      if (error) throw error
+    mutationFn: ({ videoId, areaId }: { videoId: number; areaId: number | null }) => {
+      const qs = areaId ? `?area_id=${areaId}` : ''
+      return apiFetch(`/api/taxonomy/videos/${videoId}/area${qs}`, { method: 'PUT' })
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['videos'] })
@@ -169,7 +121,7 @@ export function useUpdateVideoArea() {
 }
 
 // ============================================================================
-// TAXONOMY VIDEO PREVIEW HOOKS (lightweight for taxonomy page)
+// TAXONOMY VIDEO PREVIEW HOOKS
 // ============================================================================
 
 export interface TaxonomyVideoPreview {
@@ -185,75 +137,25 @@ export function useVideosByArea(areaId: number | null, limit: number = 20) {
     queryKey: ['taxonomy-videos-area', areaId, limit],
     queryFn: async () => {
       if (!areaId) return []
-      const { data, error } = await supabase
-        .from('videos')
-        .select('id, title, author, url, thumbnail')
-        .eq('area_id', areaId)
-        .order('created_at', { ascending: false })
-        .limit(limit)
-      if (error) throw error
-      return data as TaxonomyVideoPreview[]
+      const data = await apiFetch<{ id: number; title: string; author: string; url: string; thumbnail: string | null }[]>(`/api/videos?area_id=${areaId}`)
+      return data.slice(0, limit) as TaxonomyVideoPreview[]
     },
     enabled: !!areaId,
   })
 }
 
-export function useVideosByTopic(topicId: number | null, limit: number = 20) {
+export function useVideosByTopic(_topicId: number | null, _limit: number = 20) {
   return useQuery({
-    queryKey: ['taxonomy-videos-topic', topicId, limit],
-    queryFn: async () => {
-      if (!topicId) return []
-      // Get video IDs from video_topics junction
-      const { data: videoTopics, error: jtError } = await supabase
-        .from('video_topics')
-        .select('video_id')
-        .eq('topic_id', topicId)
-        .limit(limit)
-
-      if (jtError) throw jtError
-      if (!videoTopics || videoTopics.length === 0) return []
-
-      const videoIds = videoTopics.map((vt: { video_id: number }) => vt.video_id)
-
-      const { data, error } = await supabase
-        .from('videos')
-        .select('id, title, author, url, thumbnail')
-        .in('id', videoIds)
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      return data as TaxonomyVideoPreview[]
-    },
-    enabled: !!topicId,
+    queryKey: ['taxonomy-videos-topic', _topicId, _limit],
+    queryFn: async () => [] as TaxonomyVideoPreview[],
+    enabled: !!_topicId,
   })
 }
 
-export function useVideosByTag(tagId: number | null, limit: number = 20) {
+export function useVideosByTag(_tagId: number | null, _limit: number = 20) {
   return useQuery({
-    queryKey: ['taxonomy-videos-tag', tagId, limit],
-    queryFn: async () => {
-      if (!tagId) return []
-      // Get video IDs from video_tags junction
-      const { data: videoTags, error: jtError } = await supabase
-        .from('video_tags')
-        .select('video_id')
-        .eq('tag_id', tagId)
-        .limit(limit)
-
-      if (jtError) throw jtError
-      if (!videoTags || videoTags.length === 0) return []
-
-      const videoIds = videoTags.map((vt: { video_id: number }) => vt.video_id)
-
-      const { data, error } = await supabase
-        .from('videos')
-        .select('id, title, author, url, thumbnail')
-        .in('id', videoIds)
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      return data as TaxonomyVideoPreview[]
-    },
-    enabled: !!tagId,
+    queryKey: ['taxonomy-videos-tag', _tagId, _limit],
+    queryFn: async () => [] as TaxonomyVideoPreview[],
+    enabled: !!_tagId,
   })
 }

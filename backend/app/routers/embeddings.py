@@ -1,38 +1,38 @@
 """
 Embeddings router for RAG functionality.
-Uses Ollama for embeddings and Supabase pgvector for storage/search.
+Uses Ollama for embeddings and pgvector for storage/search.
 """
 import asyncio
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 import httpx
-from supabase import create_client, Client
+from sqlalchemy import select, update, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.session import get_db
+from app.db.models import Video
+from app.config import get_settings
 
 router = APIRouter()
-
-# Supabase client
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+settings = get_settings()
 
 # Ollama config
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_URL = settings.ollama_url
 EMBEDDING_MODEL = "nomic-embed-text"
 
-# Thread pool for blocking operations
 executor = ThreadPoolExecutor(max_workers=2)
 
 
 # ============== Pydantic Models ==============
 
 class EmbeddingGenerateRequest(BaseModel):
-    video_ids: Optional[list[int]] = None  # If None, process all without embedding
+    video_ids: Optional[list[int]] = None
     batch_size: int = 20
-    force_regenerate: bool = False  # Regenerate even if embedding exists
+    force_regenerate: bool = False
 
 
 class EmbeddingGenerateResponse(BaseModel):
@@ -46,8 +46,8 @@ class EmbeddingGenerateResponse(BaseModel):
 class SemanticSearchRequest(BaseModel):
     query: str
     limit: int = 10
-    threshold: float = 0.3  # Minimum similarity score
-    source_filter: Optional[str] = None  # Filter by source (youtube, tiktok, etc.)
+    threshold: float = 0.3
+    source_filter: Optional[str] = None
 
 
 class SearchResult(BaseModel):
@@ -69,9 +69,9 @@ class SemanticSearchResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     query: str
-    video_ids: Optional[list[int]] = None  # Limit context to specific videos
-    context_limit: int = 5  # Max videos to include in context
-    model: str = "llama3.2:3b"  # LLM model for chat
+    video_ids: Optional[list[int]] = None
+    context_limit: int = 5
+    model: str = "llama3.2:3b"
 
 
 class ChatSource(BaseModel):
@@ -98,342 +98,223 @@ class EmbeddingStats(BaseModel):
 
 # ============== Helper Functions ==============
 
-def generate_embedding_sync(text: str) -> list[float]:
-    """Generate embedding using Ollama (synchronous)."""
-    import requests
-
-    response = requests.post(
-        f"{OLLAMA_URL}/api/embeddings",
-        json={
-            "model": EMBEDDING_MODEL,
-            "prompt": text
-        },
-        timeout=60
-    )
-
-    if response.status_code != 200:
-        raise Exception(f"Ollama embedding error: {response.text}")
-
-    return response.json()["embedding"]
-
-
 async def generate_embedding(text: str) -> list[float]:
-    """Generate embedding using Ollama (async)."""
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
             f"{OLLAMA_URL}/api/embeddings",
-            json={
-                "model": EMBEDDING_MODEL,
-                "prompt": text
-            }
+            json={"model": EMBEDDING_MODEL, "prompt": text}
         )
-
         if response.status_code != 200:
             raise Exception(f"Ollama embedding error: {response.text}")
-
         return response.json()["embedding"]
 
 
 def build_video_text(video: dict) -> str:
-    """Build text representation of video for embedding."""
     parts = []
-
     if video.get("title"):
-        parts.append(f"Título: {video['title']}")
-
+        parts.append(f"Titulo: {video['title']}")
     if video.get("author"):
         parts.append(f"Autor: {video['author']}")
-
     if video.get("summary"):
         parts.append(f"Resumen: {video['summary']}")
-
     if video.get("key_points") and isinstance(video["key_points"], list):
         points = "\n".join(f"- {p}" for p in video["key_points"][:5])
         parts.append(f"Puntos clave:\n{points}")
-
     if video.get("description"):
-        desc = video["description"][:500]  # Limit description length
-        parts.append(f"Descripción: {desc}")
-
+        desc = video["description"][:500]
+        parts.append(f"Descripcion: {desc}")
     return "\n\n".join(parts)
 
 
 async def generate_llm_response(prompt: str, model: str) -> str:
-    """Generate response using Ollama LLM."""
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{OLLAMA_URL}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False
-            }
+            json={"model": model, "prompt": prompt, "stream": False}
         )
-
         if response.status_code != 200:
             raise Exception(f"Ollama LLM error: {response.text}")
-
         return response.json()["response"]
+
+
+async def search_videos_by_embedding(
+    db: AsyncSession,
+    query_embedding: list[float],
+    match_threshold: float = 0.5,
+    match_count: int = 10,
+) -> list[dict]:
+    """Python implementation of the search_videos_by_embedding RPC function."""
+    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    sql = text("""
+        SELECT
+            v.id, v.youtube_id, v.title, v.author, v.summary, v.key_points,
+            v.source, v.thumbnail,
+            (1 - (v.embedding <=> :emb::vector)) as similarity
+        FROM videos v
+        WHERE v.embedding IS NOT NULL
+          AND 1 - (v.embedding <=> :emb::vector) > :threshold
+        ORDER BY v.embedding <=> :emb::vector
+        LIMIT :limit
+    """)
+    result = await db.execute(sql, {"emb": embedding_str, "threshold": match_threshold, "limit": match_count})
+    rows = result.mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def get_embedding_stats_from_db(db: AsyncSession) -> dict:
+    """Python implementation of get_embedding_stats."""
+    total_q = await db.execute(select(func.count(Video.id)))
+    total = total_q.scalar() or 0
+
+    with_emb_q = await db.execute(select(func.count(Video.id)).where(Video.embedding.isnot(None)))
+    with_emb = with_emb_q.scalar() or 0
+
+    # Stats by source
+    source_q = await db.execute(
+        select(
+            Video.source,
+            func.count(Video.id),
+            func.count(Video.embedding),
+        ).group_by(Video.source)
+    )
+    by_source = {}
+    for row in source_q.all():
+        source = row[0] or "unknown"
+        by_source[source] = {"total": row[1], "with_embedding": row[2]}
+
+    return {
+        "total_videos": total,
+        "with_embedding": with_emb,
+        "without_embedding": total - with_emb,
+        "percentage_complete": round((with_emb / total * 100) if total > 0 else 0, 2),
+        "by_source": by_source,
+    }
 
 
 # ============== Endpoints ==============
 
 @router.get("/stats", response_model=EmbeddingStats)
-async def get_embedding_stats():
-    """Get statistics about embedding coverage."""
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase not configured")
-
-    # Get total counts
-    all_videos = []
-    offset = 0
-    batch_size = 1000
-
-    while True:
-        response = supabase.table("videos").select(
-            "id, embedding, source"
-        ).range(offset, offset + batch_size - 1).execute()
-
-        if not response.data:
-            break
-
-        all_videos.extend(response.data)
-        offset += batch_size
-
-        if len(response.data) < batch_size:
-            break
-
-    total = len(all_videos)
-    with_embedding = sum(1 for v in all_videos if v.get("embedding"))
-    without_embedding = total - with_embedding
-
-    # Stats by source
-    by_source = {}
-    for video in all_videos:
-        source = video.get("source") or "unknown"
-        if source not in by_source:
-            by_source[source] = {"total": 0, "with_embedding": 0}
-        by_source[source]["total"] += 1
-        if video.get("embedding"):
-            by_source[source]["with_embedding"] += 1
-
-    return EmbeddingStats(
-        total_videos=total,
-        with_embedding=with_embedding,
-        without_embedding=without_embedding,
-        percentage_complete=round((with_embedding / total * 100) if total > 0 else 0, 2),
-        by_source=by_source
-    )
+async def get_stats(db: AsyncSession = Depends(get_db)):
+    return await get_embedding_stats_from_db(db)
 
 
 @router.post("/generate", response_model=EmbeddingGenerateResponse)
-async def generate_embeddings(request: EmbeddingGenerateRequest):
-    """Generate embeddings for videos that don't have them."""
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase not configured")
-
+async def generate_embeddings(request: EmbeddingGenerateRequest, db: AsyncSession = Depends(get_db)):
     start_time = time.time()
     processed = 0
     failed = 0
     skipped = 0
     errors = []
 
-    # Get videos to process
+    query = select(Video)
     if request.video_ids:
-        # Specific videos
-        query = supabase.table("videos").select(
-            "id, youtube_id, title, author, summary, key_points, description, embedding"
-        ).in_("id", request.video_ids)
-    else:
-        # All videos without embedding (or all if force_regenerate)
-        query = supabase.table("videos").select(
-            "id, youtube_id, title, author, summary, key_points, description, embedding"
-        )
-        if not request.force_regenerate:
-            query = query.is_("embedding", "null")
+        query = query.where(Video.id.in_(request.video_ids))
+    elif not request.force_regenerate:
+        query = query.where(Video.embedding.is_(None))
 
-    # Fetch in batches
-    all_videos = []
-    offset = 0
-    batch_size = 1000
+    result = await db.execute(query)
+    all_videos = result.scalars().all()
 
-    while True:
-        response = query.range(offset, offset + batch_size - 1).execute()
-
-        if not response.data:
-            break
-
-        all_videos.extend(response.data)
-        offset += batch_size
-
-        if len(response.data) < batch_size:
-            break
-
-    # Filter if not force regenerate
     if not request.force_regenerate:
-        videos_to_process = [v for v in all_videos if not v.get("embedding")]
+        videos_to_process = [v for v in all_videos if v.embedding is None]
     else:
-        videos_to_process = all_videos
+        videos_to_process = list(all_videos)
 
-    # Process in batches
     for i in range(0, len(videos_to_process), request.batch_size):
         batch = videos_to_process[i:i + request.batch_size]
-
         for video in batch:
             try:
-                # Skip if no meaningful content
-                if not video.get("title") and not video.get("summary"):
+                if not video.title and not video.summary:
                     skipped += 1
                     continue
 
-                # Build text and generate embedding
-                text = build_video_text(video)
-                embedding = await generate_embedding(text)
+                video_dict = {
+                    "title": video.title, "author": video.author,
+                    "summary": video.summary, "key_points": video.key_points,
+                    "description": video.description,
+                }
+                text_repr = build_video_text(video_dict)
+                embedding = await generate_embedding(text_repr)
 
-                # Save to Supabase
-                supabase.table("videos").update({
-                    "embedding": embedding,
-                    "embedding_updated_at": "now()"
-                }).eq("id", video["id"]).execute()
-
+                video.embedding = embedding
+                await db.commit()
                 processed += 1
-
             except Exception as e:
                 failed += 1
-                errors.append(f"Video {video.get('id')}: {str(e)[:100]}")
-
-        # Small delay between batches to avoid overwhelming Ollama
+                errors.append(f"Video {video.id}: {str(e)[:100]}")
         await asyncio.sleep(0.5)
 
     return EmbeddingGenerateResponse(
-        processed=processed,
-        failed=failed,
-        skipped=skipped,
+        processed=processed, failed=failed, skipped=skipped,
         processing_time_seconds=round(time.time() - start_time, 2),
-        errors=errors[:10]  # Limit errors in response
+        errors=errors[:10],
     )
 
 
 @router.post("/search", response_model=SemanticSearchResponse)
-async def semantic_search(request: SemanticSearchRequest):
-    """Search videos by semantic similarity."""
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase not configured")
-
+async def semantic_search(request: SemanticSearchRequest, db: AsyncSession = Depends(get_db)):
     start_time = time.time()
-
-    # Generate embedding for query
     query_embedding = await generate_embedding(request.query)
 
-    # Search using pgvector function
-    response = supabase.rpc(
-        "search_videos_by_embedding",
-        {
-            "query_embedding": query_embedding,
-            "match_threshold": request.threshold,
-            "match_count": request.limit * 2  # Get more to filter
-        }
-    ).execute()
+    rows = await search_videos_by_embedding(
+        db, query_embedding, request.threshold, request.limit * 2
+    )
 
     results = []
-    for row in response.data or []:
-        # Apply source filter if specified
-        if request.source_filter:
-            # Need to get source from videos table
-            video_response = supabase.table("videos").select(
-                "source, thumbnail"
-            ).eq("id", row["id"]).single().execute()
-
-            if video_response.data:
-                if video_response.data.get("source") != request.source_filter:
-                    continue
-                source = video_response.data.get("source")
-                thumbnail = video_response.data.get("thumbnail")
-            else:
-                continue
-        else:
-            # Get source and thumbnail
-            video_response = supabase.table("videos").select(
-                "source, thumbnail"
-            ).eq("id", row["id"]).single().execute()
-            source = video_response.data.get("source") if video_response.data else None
-            thumbnail = video_response.data.get("thumbnail") if video_response.data else None
-
+    for row in rows:
+        if request.source_filter and row.get("source") != request.source_filter:
+            continue
         results.append(SearchResult(
             id=row["id"],
-            video_id=row["youtube_id"],
+            video_id=row["youtube_id"] or "",
             title=row["title"],
             author=row["author"],
             summary=row.get("summary"),
             similarity=round(row["similarity"], 4),
-            source=source,
-            thumbnail=thumbnail
+            source=row.get("source"),
+            thumbnail=row.get("thumbnail"),
         ))
-
         if len(results) >= request.limit:
             break
 
-    processing_time = (time.time() - start_time) * 1000  # Convert to ms
-
+    processing_time = (time.time() - start_time) * 1000
     return SemanticSearchResponse(
-        results=results,
-        query=request.query,
-        processing_time_ms=round(processing_time, 2)
+        results=results, query=request.query, processing_time_ms=round(processing_time, 2)
     )
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_with_context(request: ChatRequest):
-    """Chat with RAG context from videos."""
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase not configured")
-
+async def chat_with_context(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     start_time = time.time()
-
-    # Generate embedding for the question
     query_embedding = await generate_embedding(request.query)
 
-    # Search for relevant videos
     if request.video_ids:
-        # Search within specific videos
-        # First get those videos' embeddings
-        videos_response = supabase.table("videos").select(
-            "id, youtube_id, title, author, summary, key_points, embedding"
-        ).in_("id", request.video_ids).not_.is_("embedding", "null").execute()
+        result = await db.execute(
+            select(Video).where(Video.id.in_(request.video_ids), Video.embedding.isnot(None))
+        )
+        videos = result.scalars().all()
 
-        # Calculate similarity manually
         import numpy as np
         query_vec = np.array(query_embedding)
-
         scored_videos = []
-        for video in videos_response.data or []:
-            if video.get("embedding"):
-                video_vec = np.array(video["embedding"])
-                # Cosine similarity
-                similarity = np.dot(query_vec, video_vec) / (
-                    np.linalg.norm(query_vec) * np.linalg.norm(video_vec)
-                )
-                scored_videos.append({**video, "similarity": float(similarity)})
-
-        # Sort by similarity
+        for video in videos:
+            if video.embedding is not None:
+                video_vec = np.array(video.embedding)
+                similarity = float(np.dot(query_vec, video_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(video_vec)))
+                scored_videos.append({
+                    "id": video.id, "youtube_id": video.youtube_id, "title": video.title,
+                    "author": video.author, "summary": video.summary,
+                    "key_points": video.key_points, "similarity": similarity,
+                })
         scored_videos.sort(key=lambda x: x["similarity"], reverse=True)
         relevant_videos = scored_videos[:request.context_limit]
     else:
-        # Use pgvector search
-        response = supabase.rpc(
-            "search_videos_by_embedding",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": 0.3,
-                "match_count": request.context_limit
-            }
-        ).execute()
-        relevant_videos = response.data or []
+        relevant_videos = await search_videos_by_embedding(
+            db, query_embedding, 0.3, request.context_limit
+        )
 
-    # Build context from videos
     context_parts = []
     sources = []
-
     for video in relevant_videos:
         video_context = f"**{video['title']}** (por {video['author']})"
         if video.get("summary"):
@@ -443,19 +324,14 @@ async def chat_with_context(request: ChatRequest):
             if isinstance(points, list) and points:
                 video_context += f"\nPuntos clave: {', '.join(points[:3])}"
         context_parts.append(video_context)
-
         sources.append(ChatSource(
-            id=video["id"],
-            video_id=video["youtube_id"],
-            title=video["title"],
-            author=video["author"],
-            similarity=round(video.get("similarity", 0), 4)
+            id=video["id"], video_id=video.get("youtube_id") or "",
+            title=video["title"], author=video["author"],
+            similarity=round(video.get("similarity", 0), 4),
         ))
 
     context = "\n\n---\n\n".join(context_parts)
-
-    # Build prompt for LLM
-    prompt = f"""Eres un asistente que responde preguntas basándose en el contenido de videos.
+    prompt = f"""Eres un asistente que responde preguntas basandose en el contenido de videos.
 
 CONTEXTO DE VIDEOS RELEVANTES:
 {context}
@@ -465,40 +341,30 @@ CONTEXTO DE VIDEOS RELEVANTES:
 PREGUNTA DEL USUARIO: {request.query}
 
 INSTRUCCIONES:
-- Responde basándote ÚNICAMENTE en la información del contexto proporcionado
-- Si la información no está en el contexto, di que no tienes información suficiente
+- Responde basandote UNICAMENTE en la informacion del contexto proporcionado
+- Si la informacion no esta en el contexto, di que no tienes informacion suficiente
 - Cita los videos relevantes cuando sea apropiado
-- Responde en español de forma clara y concisa
+- Responde en espanol de forma clara y concisa
 
 RESPUESTA:"""
 
-    # Generate response
     answer = await generate_llm_response(prompt, request.model)
 
     return ChatResponse(
-        answer=answer.strip(),
-        sources=sources,
-        processing_time_seconds=round(time.time() - start_time, 2)
+        answer=answer.strip(), sources=sources,
+        processing_time_seconds=round(time.time() - start_time, 2),
     )
 
 
 @router.get("/models")
 async def list_available_models():
-    """List available Ollama models for chat."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(f"{OLLAMA_URL}/api/tags")
-
             if response.status_code != 200:
                 return {"models": [], "error": "Could not fetch models"}
-
             data = response.json()
             models = [m["name"] for m in data.get("models", [])]
-
-            return {
-                "models": models,
-                "embedding_model": EMBEDDING_MODEL,
-                "default_chat_model": "llama3.2:3b"
-            }
+            return {"models": models, "embedding_model": EMBEDDING_MODEL, "default_chat_model": "llama3.2:3b"}
     except Exception as e:
         return {"models": [], "error": str(e)}
