@@ -14,19 +14,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 import yt_dlp
-from supabase import create_client, Client
-from dotenv import load_dotenv
-
-# Load .env file from backend directory
-env_path = Path(__file__).parent.parent.parent / ".env"
-load_dotenv(env_path)
+from app.db.session import async_session_maker
+from app.db.models import SubscribedChannel as SubscribedChannelModel, Video as VideoModel
+from sqlalchemy import select, update
 
 router = APIRouter()
-
-# Supabase client
-SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
 
 # Thread pool for running yt-dlp (it's blocking)
 # Increased to 5 workers to handle more concurrent requests
@@ -822,13 +814,7 @@ def parse_google_takeout_csv(csv_content: str) -> list[dict]:
 
 @router.post("/subscribed-channels/import-csv", response_model=ImportCSVResponse)
 async def import_channels_from_csv(request: ImportCSVRequest):
-    """
-    Import subscribed channels from Google Takeout CSV.
-    Updates existing channels, inserts new ones.
-    """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
+    """Import subscribed channels from Google Takeout CSV."""
     channels = parse_google_takeout_csv(request.csv_content)
     if not channels:
         raise HTTPException(status_code=400, detail="No valid channels found in CSV")
@@ -837,84 +823,67 @@ async def import_channels_from_csv(request: ImportCSVRequest):
     updated = 0
     skipped = 0
 
-    for channel in channels:
-        try:
-            # Check if channel already exists
-            existing = supabase.table("subscribed_channels").select("id").eq(
-                "channel_id", channel["channel_id"]
-            ).execute()
-
-            if existing.data and len(existing.data) > 0:
-                # Update existing channel name (might have changed)
-                supabase.table("subscribed_channels").update({
-                    "channel_name": channel["channel_name"],
-                    "channel_url": channel["channel_url"]
-                }).eq("channel_id", channel["channel_id"]).execute()
-                updated += 1
-            else:
-                # Insert new channel
-                supabase.table("subscribed_channels").insert({
-                    "channel_id": channel["channel_id"],
-                    "channel_name": channel["channel_name"],
-                    "channel_url": channel["channel_url"],
-                    "is_active": True,
-                    "total_videos_imported": 0
-                }).execute()
-                imported += 1
-
-        except Exception as e:
-            print(f"Error processing channel {channel['channel_id']}: {e}")
-            skipped += 1
+    async with async_session_maker() as db:
+        for channel in channels:
+            try:
+                existing = await db.execute(
+                    select(SubscribedChannelModel).where(SubscribedChannelModel.channel_id == channel["channel_id"])
+                )
+                if existing.scalar_one_or_none():
+                    await db.execute(
+                        update(SubscribedChannelModel)
+                        .where(SubscribedChannelModel.channel_id == channel["channel_id"])
+                        .values(channel_name=channel["channel_name"], channel_url=channel["channel_url"])
+                    )
+                    updated += 1
+                else:
+                    db.add(SubscribedChannelModel(
+                        channel_id=channel["channel_id"], channel_name=channel["channel_name"],
+                        channel_url=channel["channel_url"], is_active=True, total_videos_imported=0,
+                    ))
+                    imported += 1
+            except Exception as e:
+                print(f"Error processing channel {channel['channel_id']}: {e}")
+                skipped += 1
+        await db.commit()
 
     return ImportCSVResponse(
-        channels_imported=imported,
-        channels_updated=updated,
-        channels_skipped=skipped,
-        total_in_csv=len(channels)
+        channels_imported=imported, channels_updated=updated,
+        channels_skipped=skipped, total_in_csv=len(channels),
     )
 
 
 @router.get("/subscribed-channels", response_model=SubscribedChannelsListResponse)
 async def list_subscribed_channels():
-    """
-    Get all subscribed channels from the database.
-    """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    try:
-        result = supabase.table("subscribed_channels").select("*").order(
-            "channel_name", desc=False
-        ).execute()
-
-        channels = [SubscribedChannel(**c) for c in result.data]
+    """Get all subscribed channels from the database."""
+    async with async_session_maker() as db:
+        result = await db.execute(select(SubscribedChannelModel).order_by(SubscribedChannelModel.channel_name))
+        db_channels = result.scalars().all()
+        channels = [SubscribedChannel(
+            id=c.id, channel_id=c.channel_id, channel_name=c.channel_name,
+            channel_url=c.channel_url, thumbnail=c.thumbnail, is_active=c.is_active,
+            first_import_at=c.first_import_at.isoformat() if c.first_import_at else None,
+            last_video_date=c.last_video_date,
+            last_import_at=c.last_import_at.isoformat() if c.last_import_at else None,
+            total_videos_imported=c.total_videos_imported,
+            created_at=c.created_at.isoformat() if c.created_at else None,
+            updated_at=c.updated_at.isoformat() if c.updated_at else None,
+        ) for c in db_channels]
         active_count = sum(1 for c in channels if c.is_active)
-
-        return SubscribedChannelsListResponse(
-            channels=channels,
-            total=len(channels),
-            active=active_count
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching channels: {str(e)}")
+        return SubscribedChannelsListResponse(channels=channels, total=len(channels), active=active_count)
 
 
 @router.post("/subscribed-channels/toggle")
 async def toggle_channel_active(request: ToggleChannelRequest):
-    """
-    Toggle a channel's active status.
-    """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    try:
-        supabase.table("subscribed_channels").update({
-            "is_active": request.is_active
-        }).eq("channel_id", request.channel_id).execute()
-
-        return {"success": True, "channel_id": request.channel_id, "is_active": request.is_active}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating channel: {str(e)}")
+    """Toggle a channel's active status."""
+    async with async_session_maker() as db:
+        await db.execute(
+            update(SubscribedChannelModel)
+            .where(SubscribedChannelModel.channel_id == request.channel_id)
+            .values(is_active=request.is_active)
+        )
+        await db.commit()
+    return {"success": True, "channel_id": request.channel_id, "is_active": request.is_active}
 
 
 def extract_channel_info_sync(url: str, use_cookies: bool = True, browser: str = "chrome") -> dict:
@@ -946,79 +915,40 @@ async def add_channel_by_url(request: AddChannelByURLRequest):
 
     Extracts channel metadata using yt-dlp and saves to database.
     """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
     try:
         loop = asyncio.get_event_loop()
-        # Add timeout to prevent hanging
         info = await asyncio.wait_for(
-            loop.run_in_executor(
-                executor,
-                lambda: extract_channel_info_sync(request.url, request.use_cookies, request.browser)
-            ),
-            timeout=45.0  # 45 second timeout
+            loop.run_in_executor(executor, lambda: extract_channel_info_sync(request.url, request.use_cookies, request.browser)),
+            timeout=45.0,
         )
-
         if not info:
             raise HTTPException(status_code=404, detail="Could not extract channel information")
 
-        # Extract channel details from the response
         channel_id = info.get('channel_id') or info.get('id', '')
         channel_name = info.get('channel') or info.get('uploader') or info.get('title') or 'Unknown'
-
-        # Build canonical channel URL
         channel_url = f"https://www.youtube.com/channel/{channel_id}/videos" if channel_id else request.url
-
-        # Get thumbnail
         thumbnail = None
-        thumbnails = info.get('thumbnails', [])
-        if thumbnails and isinstance(thumbnails, list):
-            # Try to get a decent resolution thumbnail
-            for t in thumbnails:
-                if t.get('url'):
-                    thumbnail = t['url']
-                    break
-
+        for t in (info.get('thumbnails') or []):
+            if t.get('url'):
+                thumbnail = t['url']
+                break
         if not channel_id:
             raise HTTPException(status_code=400, detail="Could not extract channel ID from URL")
 
-        # Check if channel already exists
-        existing = supabase.table("subscribed_channels").select("id, channel_name").eq(
-            "channel_id", channel_id
-        ).execute()
+        async with async_session_maker() as db:
+            existing = await db.execute(select(SubscribedChannelModel).where(SubscribedChannelModel.channel_id == channel_id))
+            if existing.scalar_one_or_none():
+                return {"success": False, "message": "Channel already exists", "already_exists": True}
+            db.add(SubscribedChannelModel(
+                channel_id=channel_id, channel_name=channel_name, channel_url=channel_url,
+                thumbnail=thumbnail, is_active=True, total_videos_imported=0,
+            ))
+            await db.commit()
 
-        if existing.data and len(existing.data) > 0:
-            return {
-                "success": False,
-                "message": f"Channel '{existing.data[0]['channel_name']}' already exists",
-                "channel_id": channel_id,
-                "already_exists": True
-            }
-
-        # Insert new channel
-        result = supabase.table("subscribed_channels").insert({
-            "channel_id": channel_id,
-            "channel_name": channel_name,
-            "channel_url": channel_url,
-            "thumbnail": thumbnail,
-            "is_active": True,
-            "total_videos_imported": 0
-        }).execute()
-
-        return {
-            "success": True,
-            "message": f"Channel '{channel_name}' added successfully",
-            "channel": {
-                "channel_id": channel_id,
-                "channel_name": channel_name,
-                "channel_url": channel_url,
-                "thumbnail": thumbnail
-            }
-        }
-
+        return {"success": True, "message": f"Channel '{channel_name}' added successfully",
+                "channel": {"channel_id": channel_id, "channel_name": channel_name, "channel_url": channel_url, "thumbnail": thumbnail}}
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Timeout: Could not fetch channel information. YouTube may be slow or blocking requests.")
+        raise HTTPException(status_code=504, detail="Timeout fetching channel info")
     except HTTPException:
         raise
     except Exception as e:
@@ -1030,14 +960,11 @@ async def delete_subscribed_channel(channel_id: str):
     """
     Delete a subscribed channel from the database.
     """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
-    try:
-        supabase.table("subscribed_channels").delete().eq("channel_id", channel_id).execute()
-        return {"success": True, "channel_id": channel_id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting channel: {str(e)}")
+    from sqlalchemy import delete as sa_delete
+    async with async_session_maker() as db:
+        await db.execute(sa_delete(SubscribedChannelModel).where(SubscribedChannelModel.channel_id == channel_id))
+        await db.commit()
+    return {"success": True, "channel_id": channel_id}
 
 
 @router.post("/subscribed-channels/import-videos", response_model=ImportVideosFromChannelsResponse)
@@ -1052,9 +979,6 @@ async def import_videos_from_subscribed_channels(request: ImportVideosFromChanne
 
     Deduplication is always done by youtube_id.
     """
-    if not supabase:
-        raise HTTPException(status_code=500, detail="Database not configured")
-
     # Generate job ID and register it
     job_id = f"import_{int(time.time())}"
     register_job(job_id, "channel_import")
@@ -1062,23 +986,27 @@ async def import_videos_from_subscribed_channels(request: ImportVideosFromChanne
     start_time = time.time()
 
     print(f"\n{'='*60}")
-    print(f"📥 IMPORT VIDEOS FROM SUBSCRIBED CHANNELS [Job: {job_id}]")
+    print(f"IMPORT VIDEOS FROM SUBSCRIBED CHANNELS [Job: {job_id}]")
     print(f"{'='*60}")
     print(f"Mode: {request.mode} | Videos/channel: {request.videos_per_channel}")
-    print(f"Full metadata: {request.extract_full_metadata} | Transcript: {request.extract_transcript}")
 
     # Get channels to process
-    if request.channel_ids:
-        channels_result = supabase.table("subscribed_channels").select("*").in_(
-            "channel_id", request.channel_ids
-        ).execute()
-    else:
-        # All active channels
-        channels_result = supabase.table("subscribed_channels").select("*").eq(
-            "is_active", True
-        ).execute()
+    async with async_session_maker() as db:
+        if request.channel_ids:
+            ch_result = await db.execute(select(SubscribedChannelModel).where(SubscribedChannelModel.channel_id.in_(request.channel_ids)))
+        else:
+            ch_result = await db.execute(select(SubscribedChannelModel).where(SubscribedChannelModel.is_active == True))
+        db_channels = ch_result.scalars().all()
+        channels = [{
+            "channel_id": c.channel_id, "channel_name": c.channel_name,
+            "last_video_date": c.last_video_date, "first_import_at": c.first_import_at,
+            "total_videos_imported": c.total_videos_imported,
+        } for c in db_channels]
 
-    channels = channels_result.data
+        # Get existing youtube_ids
+        existing_result = await db.execute(select(VideoModel.youtube_id).where(VideoModel.youtube_id.isnot(None)))
+        existing_ids = set(r[0] for r in existing_result.all())
+
     if not channels:
         complete_job(job_id)
         raise HTTPException(status_code=404, detail="No channels found to process")
@@ -1086,9 +1014,7 @@ async def import_videos_from_subscribed_channels(request: ImportVideosFromChanne
     total_channels = len(channels)
     print(f"📊 Channels to process: {total_channels}")
 
-    # Get existing youtube_ids for deduplication
-    existing_result = supabase.table("videos").select("youtube_id").execute()
-    existing_ids = set(v["youtube_id"] for v in existing_result.data if v.get("youtube_id"))
+    # existing_ids already fetched above in the async with block
 
     all_videos: list[VideoMetadata] = []
     new_videos_count = 0
@@ -1206,9 +1132,13 @@ async def import_videos_from_subscribed_channels(request: ImportVideosFromChanne
                         except ValueError:
                             pass
 
-            supabase.table("subscribed_channels").update(update_data).eq(
-                "channel_id", channel_id
-            ).execute()
+            async with async_session_maker() as db:
+                await db.execute(
+                    update(SubscribedChannelModel)
+                    .where(SubscribedChannelModel.channel_id == channel_id)
+                    .values(**update_data)
+                )
+                await db.commit()
 
             channels_processed += 1
             new_videos_count += channel_new_videos

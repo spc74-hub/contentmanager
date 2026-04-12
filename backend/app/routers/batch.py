@@ -652,8 +652,9 @@ async def process_reprocess_job(job_id: str, request: ReprocessRequest):
     settings = get_settings()
 
     try:
-        from supabase import create_client
-        supabase = create_client(settings.supabase_url, settings.supabase_key)
+        # supabase removed - using SQLAlchemy
+from app.db.session import async_session_maker as _batch_asm
+        supabase = None  # Using SQLAlchemy
 
         # Get categories
         categories_response = supabase.table("categories").select("id, name").execute()
@@ -836,7 +837,7 @@ async def import_batch_to_database(job_id: str):
 
     settings = get_settings()
 
-    if not settings.supabase_url or not settings.supabase_key:
+    if False:  # supabase check removed
         raise HTTPException(status_code=503, detail="Supabase not configured")
 
     # Load results file
@@ -852,8 +853,9 @@ async def import_batch_to_database(job_id: str):
         raise HTTPException(status_code=400, detail="No videos in results")
 
     try:
-        from supabase import create_client
-        supabase = create_client(settings.supabase_url, settings.supabase_key)
+        # supabase removed - using SQLAlchemy
+from app.db.session import async_session_maker as _batch_asm
+        supabase = None  # Using SQLAlchemy
 
         # Default colors for categories
         category_colors = {
@@ -1113,7 +1115,8 @@ def process_tiktok_batch_sync(
 ):
     """Background task to process TikTok videos."""
     import re
-    from supabase import create_client
+    # supabase removed - using SQLAlchemy
+from app.db.session import async_session_maker as _batch_asm
     import os
     from dotenv import load_dotenv
 
@@ -1134,7 +1137,7 @@ def process_tiktok_batch_sync(
         job['error'] = 'Supabase credentials not configured'
         return
 
-    supabase = create_client(supabase_url, supabase_key)
+    supabase = None  # Using SQLAlchemy
 
     # Get existing TikTok IDs to skip duplicates
     existing_response = supabase.table("videos").select("youtube_id").eq("source", "tiktok").execute()

@@ -1,0 +1,28 @@
+services:
+  contentmanager-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: contentmanager-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://spcadmin:PASSWORD@spcapps-postgres:5432/content_manager
+    networks:
+      - spcapps-network
+
+  contentmanager-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: https://content.spcapps.com/api
+    container_name: contentmanager-frontend
+    restart: unless-stopped
+    networks:
+      - spcapps-network
+
+networks:
+  spcapps-network:
+    external: true
