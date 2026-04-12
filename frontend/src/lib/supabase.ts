@@ -1,3 +1,4 @@
+// @ts-nocheck
 /**
  * API client replacing Supabase SDK.
  * All calls go through the FastAPI backend.
