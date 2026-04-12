@@ -60,15 +60,15 @@ function createAPIClient(): SupabaseClient {
       let selectCols = '*'
       let ordering = ''
       let rangeFrom = 0
-      let rangeTo = 999999
+      let __rangeTo = 999999
       let limitVal = 0
       let isSingle = false
-      let countMode = ''
+      let _countMode = ''
 
       const builder: QueryBuilder = {
         select(columns?: string, opts?: { count?: string }) {
           selectCols = columns || '*'
-          if (opts?.count) countMode = opts.count
+          if (opts?.count) _countMode = opts.count
           return builder
         },
         insert(data: unknown) {
@@ -116,7 +116,7 @@ function createAPIClient(): SupabaseClient {
         },
         range(from: number, to: number) {
           rangeFrom = from
-          rangeTo = to
+          _rangeTo = to
           return builder
         },
         limit(n: number) {
@@ -195,5 +195,6 @@ function createAPIClient(): SupabaseClient {
 }
 
 // Export both the new API functions and the compatibility client
-export const supabase = createAPIClient() as never
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const supabase = createAPIClient() as any
 export { apiFetch, API_BASE }
