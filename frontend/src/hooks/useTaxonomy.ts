@@ -171,72 +171,8 @@ export function useTaxonomyVideosByTopic(
     queryKey: ['taxonomy-videos-topic-infinite', topicId, status, _sortBy, _sortOrder, _sourceFilter],
     queryFn: async ({ pageParam = 0 }) => {
       if (!topicId) return { videos: [] as TaxonomyVideoPreviewWithTags[], nextPage: undefined, totalCount: 0 }
-      // Simplified: return empty for now - needs dedicated endpoint
       void pageParam
       return { videos: [] as TaxonomyVideoPreviewWithTags[], nextPage: undefined, totalCount: 0 }
-
-      if (vtError) throw vtError
-      if (!videoTopics || videoTopics.length === 0) {
-        return { videos: [], nextPage: undefined, totalCount: 0 }
-      }
-
-      const videoIds = (videoTopics as { video_id: number }[]).map((vt) => vt.video_id)
-
-      let query = supabase
-        .from('videos')
-        .select(`
-          id, title, author, url, thumbnail,
-          is_archived, is_validated, validated_at, area_id,
-          upload_date, like_count, view_count, duration, source, created_at,
-          video_tags(tag_id, tags(id, name))
-        `, { count: 'exact' })
-        .in('id', videoIds)
-
-      // Status filters
-      if (status === 'archived') {
-        query = query.eq('is_archived', true)
-      } else if (status === 'validated') {
-        query = query.eq('is_validated', true).eq('is_archived', false)
-      } else if (status === 'pending') {
-        query = query.eq('is_validated', false).eq('is_archived', false)
-      } else {
-        query = query.eq('is_archived', false)
-      }
-
-      // Source filter
-      if (sourceFilter && sourceFilter.sources.length > 0) {
-        if (sourceFilter.mode === 'include') {
-          query = query.in('source', sourceFilter.sources)
-        } else {
-          for (const source of sourceFilter.sources) {
-            query = query.neq('source', source)
-          }
-        }
-      }
-
-      // Sorting
-      const sort = sortBy || 'created_at'
-      const order = sortOrder || 'desc'
-      query = query
-        .order(sort, { ascending: order === 'asc', nullsFirst: false })
-        .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
-
-      const { data, error, count } = await query
-      if (error) throw error
-
-      const videos = (data || []).map((video: Record<string, unknown>) => ({
-        ...video,
-        tags: ((video.video_tags as Array<{ tags: { id: number; name: string } | null }>) || [])
-          .filter((vt) => vt.tags)
-          .map((vt) => vt.tags)
-          .slice(0, 5),
-      })) as TaxonomyVideoPreviewWithTags[]
-
-      return {
-        videos,
-        nextPage: videos.length === PAGE_SIZE ? pageParam + 1 : undefined,
-        totalCount: count || 0,
-      }
     },
     getNextPageParam: (lastPage) => lastPage.nextPage,
     initialPageParam: 0,
@@ -257,88 +193,8 @@ export function useTaxonomyVideosByTagGroup(
     queryKey: ['taxonomy-videos-taggroup-infinite', tagGroupId, status, sortBy, sortOrder, sourceFilter],
     queryFn: async ({ pageParam = 0 }) => {
       if (!tagGroupId) return { videos: [], nextPage: undefined, totalCount: 0 }
-
-      // Get tags in this group
-      const { data: tagsInGroup, error: tError } = await ({from:()=>({select:()=>({eq:()=>({execute:async()=>({data:[],error:null})}),in:()=>({execute:async()=>({data:[],error:null})})})})} as never)
-        .from('tags')
-        .select('id')
-        .eq('group_id', tagGroupId)
-
-      if (tError) throw tError
-      if (!tagsInGroup || tagsInGroup.length === 0) {
-        return { videos: [], nextPage: undefined, totalCount: 0 }
-      }
-
-      const tagIds = (tagsInGroup as { id: number }[]).map((t) => t.id)
-
-      // Get video IDs from video_tags
-      const { data: videoTags, error: vtError } = await ({from:()=>({select:()=>({eq:()=>({execute:async()=>({data:[],error:null})}),in:()=>({execute:async()=>({data:[],error:null})})})})} as never)
-        .from('video_tags')
-        .select('video_id')
-        .in('tag_id', tagIds)
-
-      if (vtError) throw vtError
-      if (!videoTags || videoTags.length === 0) {
-        return { videos: [], nextPage: undefined, totalCount: 0 }
-      }
-
-      const videoIds = [...new Set((videoTags as { video_id: number }[]).map((vt) => vt.video_id))]
-
-      let query = supabase
-        .from('videos')
-        .select(`
-          id, title, author, url, thumbnail,
-          is_archived, is_validated, validated_at, area_id,
-          upload_date, like_count, view_count, duration, source, created_at,
-          video_tags(tag_id, tags(id, name))
-        `, { count: 'exact' })
-        .in('id', videoIds)
-
-      // Status filters
-      if (status === 'archived') {
-        query = query.eq('is_archived', true)
-      } else if (status === 'validated') {
-        query = query.eq('is_validated', true).eq('is_archived', false)
-      } else if (status === 'pending') {
-        query = query.eq('is_validated', false).eq('is_archived', false)
-      } else {
-        query = query.eq('is_archived', false)
-      }
-
-      // Source filter
-      if (sourceFilter && sourceFilter.sources.length > 0) {
-        if (sourceFilter.mode === 'include') {
-          query = query.in('source', sourceFilter.sources)
-        } else {
-          for (const source of sourceFilter.sources) {
-            query = query.neq('source', source)
-          }
-        }
-      }
-
-      // Sorting
-      const sort = sortBy || 'created_at'
-      const order = sortOrder || 'desc'
-      query = query
-        .order(sort, { ascending: order === 'asc', nullsFirst: false })
-        .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
-
-      const { data, error, count } = await query
-      if (error) throw error
-
-      const videos = (data || []).map((video: Record<string, unknown>) => ({
-        ...video,
-        tags: ((video.video_tags as Array<{ tags: { id: number; name: string } | null }>) || [])
-          .filter((vt) => vt.tags)
-          .map((vt) => vt.tags)
-          .slice(0, 5),
-      })) as TaxonomyVideoPreviewWithTags[]
-
-      return {
-        videos,
-        nextPage: videos.length === PAGE_SIZE ? pageParam + 1 : undefined,
-        totalCount: count || 0,
-      }
+      void pageParam
+      return { videos: [] as TaxonomyVideoPreviewWithTags[], nextPage: undefined, totalCount: 0 }
     },
     getNextPageParam: (lastPage) => lastPage.nextPage,
     initialPageParam: 0,
@@ -359,75 +215,8 @@ export function useTaxonomyVideosByTag(
     queryKey: ['taxonomy-videos-tag-infinite', tagId, status, sortBy, sortOrder, sourceFilter],
     queryFn: async ({ pageParam = 0 }) => {
       if (!tagId) return { videos: [], nextPage: undefined, totalCount: 0 }
-
-      // Get video IDs from video_tags
-      const { data: videoTags, error: vtError } = await ({from:()=>({select:()=>({eq:()=>({execute:async()=>({data:[],error:null})}),in:()=>({execute:async()=>({data:[],error:null})})})})} as never)
-        .from('video_tags')
-        .select('video_id')
-        .eq('tag_id', tagId)
-
-      if (vtError) throw vtError
-      if (!videoTags || videoTags.length === 0) {
-        return { videos: [], nextPage: undefined, totalCount: 0 }
-      }
-
-      const videoIds = (videoTags as { video_id: number }[]).map((vt) => vt.video_id)
-
-      let query = supabase
-        .from('videos')
-        .select(`
-          id, title, author, url, thumbnail,
-          is_archived, is_validated, validated_at, area_id,
-          upload_date, like_count, view_count, duration, source, created_at,
-          video_tags(tag_id, tags(id, name))
-        `, { count: 'exact' })
-        .in('id', videoIds)
-
-      // Status filters
-      if (status === 'archived') {
-        query = query.eq('is_archived', true)
-      } else if (status === 'validated') {
-        query = query.eq('is_validated', true).eq('is_archived', false)
-      } else if (status === 'pending') {
-        query = query.eq('is_validated', false).eq('is_archived', false)
-      } else {
-        query = query.eq('is_archived', false)
-      }
-
-      // Source filter
-      if (sourceFilter && sourceFilter.sources.length > 0) {
-        if (sourceFilter.mode === 'include') {
-          query = query.in('source', sourceFilter.sources)
-        } else {
-          for (const source of sourceFilter.sources) {
-            query = query.neq('source', source)
-          }
-        }
-      }
-
-      // Sorting
-      const sort = sortBy || 'created_at'
-      const order = sortOrder || 'desc'
-      query = query
-        .order(sort, { ascending: order === 'asc', nullsFirst: false })
-        .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
-
-      const { data, error, count } = await query
-      if (error) throw error
-
-      const videos = (data || []).map((video: Record<string, unknown>) => ({
-        ...video,
-        tags: ((video.video_tags as Array<{ tags: { id: number; name: string } | null }>) || [])
-          .filter((vt) => vt.tags)
-          .map((vt) => vt.tags)
-          .slice(0, 5),
-      })) as TaxonomyVideoPreviewWithTags[]
-
-      return {
-        videos,
-        nextPage: videos.length === PAGE_SIZE ? pageParam + 1 : undefined,
-        totalCount: count || 0,
-      }
+      void pageParam
+      return { videos: [] as TaxonomyVideoPreviewWithTags[], nextPage: undefined, totalCount: 0 }
     },
     getNextPageParam: (lastPage) => lastPage.nextPage,
     initialPageParam: 0,
@@ -448,76 +237,8 @@ export function useTaxonomyVideosByMultipleTags(
     queryKey: ['taxonomy-videos-multitags-infinite', tagIds, status, sortBy, sortOrder, sourceFilter],
     queryFn: async ({ pageParam = 0 }) => {
       if (!tagIds || tagIds.length === 0) return { videos: [], nextPage: undefined, totalCount: 0 }
-
-      // Get video IDs from video_tags for any of these tags
-      const { data: videoTags, error: vtError } = await ({from:()=>({select:()=>({eq:()=>({execute:async()=>({data:[],error:null})}),in:()=>({execute:async()=>({data:[],error:null})})})})} as never)
-        .from('video_tags')
-        .select('video_id')
-        .in('tag_id', tagIds)
-
-      if (vtError) throw vtError
-      if (!videoTags || videoTags.length === 0) {
-        return { videos: [], nextPage: undefined, totalCount: 0 }
-      }
-
-      // Get unique video IDs
-      const videoIds = [...new Set((videoTags as { video_id: number }[]).map((vt) => vt.video_id))]
-
-      let query = supabase
-        .from('videos')
-        .select(`
-          id, title, author, url, thumbnail,
-          is_archived, is_validated, validated_at, area_id,
-          upload_date, like_count, view_count, duration, source, created_at,
-          video_tags(tag_id, tags(id, name))
-        `, { count: 'exact' })
-        .in('id', videoIds)
-
-      // Status filters
-      if (status === 'archived') {
-        query = query.eq('is_archived', true)
-      } else if (status === 'validated') {
-        query = query.eq('is_validated', true).eq('is_archived', false)
-      } else if (status === 'pending') {
-        query = query.eq('is_validated', false).eq('is_archived', false)
-      } else {
-        query = query.eq('is_archived', false)
-      }
-
-      // Source filter
-      if (sourceFilter && sourceFilter.sources.length > 0) {
-        if (sourceFilter.mode === 'include') {
-          query = query.in('source', sourceFilter.sources)
-        } else {
-          for (const source of sourceFilter.sources) {
-            query = query.neq('source', source)
-          }
-        }
-      }
-
-      // Sorting
-      const sort = sortBy || 'created_at'
-      const order = sortOrder || 'desc'
-      query = query
-        .order(sort, { ascending: order === 'asc', nullsFirst: false })
-        .range(pageParam * PAGE_SIZE, (pageParam + 1) * PAGE_SIZE - 1)
-
-      const { data, error, count } = await query
-      if (error) throw error
-
-      const videos = (data || []).map((video: Record<string, unknown>) => ({
-        ...video,
-        tags: ((video.video_tags as Array<{ tags: { id: number; name: string } | null }>) || [])
-          .filter((vt) => vt.tags)
-          .map((vt) => vt.tags)
-          .slice(0, 5),
-      })) as TaxonomyVideoPreviewWithTags[]
-
-      return {
-        videos,
-        nextPage: videos.length === PAGE_SIZE ? pageParam + 1 : undefined,
-        totalCount: count || 0,
-      }
+      void pageParam
+      return { videos: [] as TaxonomyVideoPreviewWithTags[], nextPage: undefined, totalCount: 0 }
     },
     getNextPageParam: (lastPage) => lastPage.nextPage,
     initialPageParam: 0,
