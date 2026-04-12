@@ -652,9 +652,8 @@ async def process_reprocess_job(job_id: str, request: ReprocessRequest):
     settings = get_settings()
 
     try:
-        # supabase removed - using SQLAlchemy
-from app.db.session import async_session_maker as _batch_asm
-        supabase = None  # Using SQLAlchemy
+        from app.db.session import async_session_maker as _batch_asm
+        pass  # batch processing needs full migration to SQLAlchemy
 
         # Get categories
         categories_response = supabase.table("categories").select("id, name").execute()
@@ -853,9 +852,8 @@ async def import_batch_to_database(job_id: str):
         raise HTTPException(status_code=400, detail="No videos in results")
 
     try:
-        # supabase removed - using SQLAlchemy
-from app.db.session import async_session_maker as _batch_asm
-        supabase = None  # Using SQLAlchemy
+        from app.db.session import async_session_maker as _batch_asm
+        pass  # batch processing needs full migration to SQLAlchemy
 
         # Default colors for categories
         category_colors = {
