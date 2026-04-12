@@ -193,7 +193,7 @@ export function VideoDetailModal({ video, category, area, onClose, onToggleFavor
                     Topics
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {videoTopics.map((vt: { topic_id: number; topic: { id: number; name_es: string; area: { color: string } } }) => (
+                    {(videoTopics as Array<{ topic_id: number; topic: { id: number; name_es: string; area: { color: string } } }>).map((vt) => (
                       <span
                         key={vt.topic_id}
                         className="px-3 py-1 text-sm rounded-full border"
