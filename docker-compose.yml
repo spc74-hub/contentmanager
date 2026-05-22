@@ -7,8 +7,6 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://spcadmin:PASSWORD@spcapps-postgres:5432/content_manager
     networks:
       - spcapps-network
 
