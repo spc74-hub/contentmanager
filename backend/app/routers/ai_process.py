@@ -1088,32 +1088,7 @@ async def process_single_video(
 
         for subcat_name in subcategories:
             try:
-                # Check if exists
-                pass  # Subcategories are deprecated - skipping DB operations
-                if False and False:  # Dead code kept for reference
-                    existing = None  # supabase.table("subcategories").select("id").eq(
-                    "name", subcat_name
-                ).eq("category_id", category_id).execute()
-
-                if existing.data:
-                    subcat_id = existing.data[0]["id"]
-                else:
-                    # Create new
-                    new_subcat = None  # Deprecated: supabase.table("subcategories").insert({
-                        "name": subcat_name,
-                        "category_id": category_id
-                    }).execute()
-                    subcat_id = new_subcat.data[0]["id"] if new_subcat.data else None
-
-                # Link video to subcategory
-                if subcat_id:
-                    try:
-                        pass  # Deprecated: supabase.table("video_subcategories").insert({
-                            "video_id": video["id"],
-                            "subcategory_id": subcat_id
-                        }).execute()
-                    except:
-                        pass  # Already linked
+                pass  # subcategories deprecated
             except Exception as e:
                 print(f"Subcategory error: {e}")
 
@@ -1582,7 +1557,7 @@ async def analyze_video_selection(request: AnalyzeSelectionRequest):
     """
     import httpx
     # supabase removed - using SQLAlchemy
-from app.db.session import async_session_maker as _asm
+    from app.db.session import async_session_maker as _asm
     from app.config import get_settings
 
     settings = get_settings()

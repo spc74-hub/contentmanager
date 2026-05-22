@@ -1114,7 +1114,7 @@ def process_tiktok_batch_sync(
     """Background task to process TikTok videos."""
     import re
     # supabase removed - using SQLAlchemy
-from app.db.session import async_session_maker as _batch_asm
+    from app.db.session import async_session_maker as _batch_asm
     import os
     from dotenv import load_dotenv
 
